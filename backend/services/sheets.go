@@ -37,7 +37,7 @@ func getStatusFromColor(color *sheets.Color) string {
 	targetPendingG := 149.0 / 255.0
 	targetPendingB := 63.0 / 255.0
 
-	const tol = 0.15 // Increased tolerance to handle API float precision and slight manual variations
+	const tol = 0.35 // Tolerance for API float precision
 
 	// 1. Check for Specific Green (Complete)
 	if math.Abs(color.Red-targetGreenR) < tol &&
@@ -54,13 +54,11 @@ func getStatusFromColor(color *sheets.Color) string {
 	}
 
 	// 3. Legacy/Manual Check: Pure Green (e.g. #00FF00)
-	// Standard green often has high G and low R/B
 	if color.Green > 0.8 && color.Red < 0.3 && color.Blue < 0.3 {
 		return "complete"
 	}
 
 	// 4. Legacy/Manual Check: Pure Red (e.g. #FF0000)
-	// Standard red often has high R and low G/B
 	if color.Red > 0.8 && color.Green < 0.3 && color.Blue < 0.3 {
 		return "pending"
 	}
@@ -108,13 +106,19 @@ func parseCellToDayTasks(date string, cellData *sheets.CellData) models.DayTasks
 	lines := strings.Split(text, "\n")
 	runs := cellData.TextFormatRuns
 
+	// Check cell-level color fallback (if no specific runs exist)
+	var globalCellColor *sheets.Color
+	if cellData.UserEnteredFormat != nil && cellData.UserEnteredFormat.TextFormat != nil {
+		globalCellColor = cellData.UserEnteredFormat.TextFormat.ForegroundColor
+	}
+
 	currentIdx := 0
 	for _, line := range lines {
 		lineLen := len(line)
 		status := "todo" // Default
 
-		// Logic: iterate runs to find the one active at currentIdx
 		if len(runs) > 0 {
+			// Logic: iterate runs to find the one active at currentIdx
 			var activeColor *sheets.Color
 			for _, run := range runs {
 				if run.StartIndex <= int64(currentIdx) {
@@ -128,6 +132,9 @@ func parseCellToDayTasks(date string, cellData *sheets.CellData) models.DayTasks
 				}
 			}
 			status = getStatusFromColor(activeColor)
+		} else if globalCellColor != nil {
+			// Fallback: If no runs, use the cell's global text color
+			status = getStatusFromColor(globalCellColor)
 		}
 
 		cleanLine := strings.TrimSpace(line)
@@ -191,10 +198,11 @@ func GetLatestTasks(employeeName string) (models.EmployeeTasksResponse, error) {
 	}
 
 	// 3. Fetch Specific Row with Formatting (Heavier)
+	// We now include userEnteredFormat(textFormat(foregroundColor)) to catch cell-level colors
 	req := srv.Spreadsheets.Get(config.SpreadsheetID).
 		Ranges(fmt.Sprintf("%s!A%d:ZZ%d", config.SheetName, rowIndex+1, rowIndex+1)).
 		IncludeGridData(true).
-		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns))))")
+		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))")
 
 	resp, err := req.Do()
 	if err != nil {
@@ -244,10 +252,11 @@ func GetAllEmployeesLatestTasks() ([]models.EmployeeTasksResponse, error) {
 		return nil, err
 	}
 
+	// Updated fields to include userEnteredFormat
 	req := srv.Spreadsheets.Get(config.SpreadsheetID).
 		Ranges(fmt.Sprintf("%s!A:ZZ", config.SheetName)).
 		IncludeGridData(true).
-		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns))))")
+		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))")
 
 	resp, err := req.Do()
 	if err != nil {
@@ -260,7 +269,7 @@ func GetAllEmployeesLatestTasks() ([]models.EmployeeTasksResponse, error) {
 	}
 	headerRow := respHeader.Values[0]
 
-	// Initialize as empty slice to avoid returning null in JSON
+	// Initialize as empty slice
 	allEmployees := []models.EmployeeTasksResponse{}
 
 	if len(resp.Sheets) > 0 && len(resp.Sheets[0].Data) > 0 {
@@ -328,7 +337,6 @@ func AddTask(req models.TaskRequest) error {
 	var sheetID int64
 	var maxCol int64
 	for _, sheet := range sheetMeta.Sheets {
-		// Use case-insensitive comparison for safety, though API returns exact title
 		if strings.EqualFold(sheet.Properties.Title, config.SheetName) {
 			sheetID = sheet.Properties.SheetId
 			maxCol = sheet.Properties.GridProperties.ColumnCount
@@ -341,7 +349,6 @@ func AddTask(req models.TaskRequest) error {
 	if err != nil {
 		return err
 	}
-	// If sheet is empty (or has no data in A:ZZ), construct header logic carefully
 	var headerRow []interface{}
 	if len(resp.Values) > 0 {
 		headerRow = resp.Values[0]
@@ -367,7 +374,6 @@ func AddTask(req models.TaskRequest) error {
 
 		// CHECK GRID LIMITS & EXPAND IF NEEDED
 		if int64(colIndex) >= maxCol {
-			// Calculate how many columns needed (usually just 1, but let's be safe)
 			columnsToAdd := int64(colIndex) - maxCol + 1
 			if columnsToAdd < 1 {
 				columnsToAdd = 1
@@ -400,8 +406,6 @@ func AddTask(req models.TaskRequest) error {
 	}
 
 	// 2. Find Employee Row (Exact Match)
-	// Re-check values in case logic changed, though row count usually stable.
-	// We use existing `resp.Values` because expanding columns doesn't shift row indices.
 	rowIndex := -1
 	for i, row := range resp.Values {
 		if len(row) > 0 {
@@ -416,11 +420,11 @@ func AddTask(req models.TaskRequest) error {
 		return fmt.Errorf("employee '%s' not found", req.EmployeeName)
 	}
 
-	// 3. Fetch Existing Rich Text to Preserve Order/Colors
+	// 3. Fetch Existing Rich Text (include userEnteredFormat fallback info)
 	cellRangeA1 := fmt.Sprintf("%s!%s%d", config.SheetName, getColumnName(colIndex+1), rowIndex+1)
 	cellResp, err := srv.Spreadsheets.Get(config.SpreadsheetID).
 		Ranges(cellRangeA1).
-		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns))))").
+		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))").
 		Do()
 
 	// struct to hold task and its exact color
@@ -439,6 +443,12 @@ func AddTask(req models.TaskRequest) error {
 			lines := strings.Split(text, "\n")
 			runs := cell.TextFormatRuns
 
+			// Fallback color for cell
+			var globalColor *sheets.Color
+			if cell.UserEnteredFormat != nil && cell.UserEnteredFormat.TextFormat != nil {
+				globalColor = cell.UserEnteredFormat.TextFormat.ForegroundColor
+			}
+
 			currIdx := 0
 			for _, line := range lines {
 				var activeColor *sheets.Color
@@ -452,6 +462,8 @@ func AddTask(req models.TaskRequest) error {
 							break
 						}
 					}
+				} else if globalColor != nil {
+					activeColor = globalColor
 				}
 
 				if strings.TrimSpace(line) != "" {
@@ -470,7 +482,6 @@ func AddTask(req models.TaskRequest) error {
 		found := false
 		for i, existing := range existingTasks {
 			if strings.EqualFold(existing.Task, newTask.Task) {
-				// FORCE update the color based on the new status from payload
 				existingTasks[i].Color = getColorFromStatus(newTask.Status)
 				found = true
 				break

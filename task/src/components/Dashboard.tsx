@@ -108,7 +108,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <RefreshCw className="animate-spin mx-auto mb-4 text-blue-600" size={40} />
-          <p className="text-gray-600">Syncing with Backend...</p>
+          <p className="text-gray-600">Syncing Your Data...</p>
         </div>
       </div>
     );

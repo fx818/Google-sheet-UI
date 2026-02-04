@@ -3,6 +3,7 @@ package services
 import (
 	// "database/sql"
 	"go-backend/config"
+	"strings"
 	"time"
 )
 
@@ -66,6 +67,8 @@ func GetAllDailyLogs() ([]DailyLog, error) {
 // UpsertEmployeeMetadata inserts or updates employee static info
 func UpsertEmployeeMetadata(empID, name, project string) error {
 	db := config.GetDB()
+	// Standardize name to lower case for uniqueness if desired, or keep as is.
+	// Current schema uses employee_name as unique key.
 	query := `
 		INSERT INTO employees (employee_id, employee_name, project_name)
 		VALUES ($1, $2, $3)
@@ -77,15 +80,27 @@ func UpsertEmployeeMetadata(empID, name, project string) error {
 }
 
 // UpsertDailyLog updates the timestamp for a specific day
+// Logic: If row exists (same name+date), ONLY update updated_at.
+// If row doesn't exist, insert with created_at = NOW().
 func UpsertDailyLog(name, date string) error {
 	db := config.GetDB()
-	// If row exists, update updated_at. If not, insert with created_at = NOW()
+	
+	// We trim space to avoid " John" vs "John" issues
+	cleanName := strings.TrimSpace(name)
+	cleanDate := strings.TrimSpace(date)
+
+	// Note: We are relying on the DB unique constraint (employee_name, task_date).
+	// If casing differs ("John" vs "john"), postgres treats them as different values unless column is citext or we lower().
+	// For now, we assume the frontend sends consistent names (e.g. from the sheet).
+	
 	query := `
 		INSERT INTO daily_logs (employee_name, task_date, created_at, updated_at)
 		VALUES ($1, $2, NOW(), NOW())
 		ON CONFLICT (employee_name, task_date) 
-		DO UPDATE SET updated_at = NOW();
+		DO UPDATE SET updated_at = NOW(); 
 	`
-	_, err := db.Exec(query, name, date)
+	// The DO UPDATE clause specifically does NOT touch created_at, preventing overwrite.
+	
+	_, err := db.Exec(query, cleanName, cleanDate)
 	return err
 }

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	// "os"
 
 	_ "github.com/lib/pq"
 )
@@ -11,21 +12,26 @@ import (
 var DB *sql.DB
 
 // Connection string for NeonDB
-const connectionString = "postgres://neondb_owner:npg_h7cagUZXCp1q@ep-royal-firefly-ah9zoqad-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require"
+// var connectionString, _ = os.LookupEnv("NEON_DB_CONNECTION_STRING")
 
+const connectionString="postgresql://neondb_owner:npg_h7cagUZXCp1q@ep-royal-firefly-ah9zoqad-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+
+// InitDB initializes the database connection and performs auto-migration.
 func InitDB() {
 	var err error
 	DB, err = sql.Open("postgres", connectionString)
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
-
+	if connectionString == "" {
+		log.Fatal("NEON_DB_CONNECTION_STRING environment variable is not set")
+	}
 	if err = DB.Ping(); err != nil {
-		log.Fatal("Failed to ping database:", err)
+		log.Fatal("Failed to ping database:", err, connectionString)
 	}
 
 	// --- AUTO MIGRATION ---
-	
+
 	// 1. Employees Table (Static Info)
 	createEmployeesTable := `
 	CREATE TABLE IF NOT EXISTS employees (

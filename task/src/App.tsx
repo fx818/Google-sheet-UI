@@ -13,7 +13,7 @@ function App() {
       <nav className="bg-white shadow-sm border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-bold text-gray-800">Employee Task Manager</h1>
+            <h1 className="text-2xl font-bold text-gray-800">IM Task Manager</h1>
             <div className="flex gap-2">
               <button
                 onClick={() => setCurrentView('dashboard')}
@@ -24,7 +24,7 @@ function App() {
                 }`}
               >
                 <LayoutDashboard size={18} />
-                Dashboard
+                Home
               </button>
               <button
                 onClick={() => setCurrentView('form')}
@@ -35,7 +35,7 @@ function App() {
                 }`}
               >
                 <UserPlus size={18} />
-                Add Employee Task
+                Add tasks
               </button>
             </div>
           </div>

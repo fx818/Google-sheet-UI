@@ -6,15 +6,30 @@ import (
 	"go-backend/config"
 	"go-backend/models"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/api/sheets/v4"
 )
 
+// Target specific sheets (Exact names as provided)
+var targetSheets = []string{"DEV", "Managers"}
+
 // Helper: Exact Name Match
 func namesMatch(sheetName, searchName string) bool {
 	return strings.EqualFold(strings.TrimSpace(sheetName), strings.TrimSpace(searchName))
+}
+
+// Helper: Find sheet by title (case-insensitive)
+func findSheetByTitle(meta *sheets.Spreadsheet, title string) *sheets.Sheet {
+	for _, sheet := range meta.Sheets {
+		if strings.EqualFold(sheet.Properties.Title, title) {
+			return sheet
+		}
+	}
+	return nil
 }
 
 // Helper: Determine status from color
@@ -23,47 +38,36 @@ func getStatusFromColor(color *sheets.Color) string {
 		return "todo"
 	}
 
-	// ---------------------------------------------------------
-	// Color Definitions (Normalized 0.0 - 1.0)
-	// ---------------------------------------------------------
-
-	// Green: #34A853 -> R:52, G:168, B:83
 	targetGreenR := 52.0 / 255.0
 	targetGreenG := 168.0 / 255.0
 	targetGreenB := 83.0 / 255.0
 
-	// Pending (Orange/Red): #E7953F -> R:231, G:149, B:63
 	targetPendingR := 231.0 / 255.0
 	targetPendingG := 149.0 / 255.0
 	targetPendingB := 63.0 / 255.0
 
-	const tol = 0.35 // Tolerance for API float precision
+	const tol = 0.25
 
-	// 1. Check for Specific Green (Complete)
 	if math.Abs(color.Red-targetGreenR) < tol &&
 		math.Abs(color.Green-targetGreenG) < tol &&
 		math.Abs(color.Blue-targetGreenB) < tol {
 		return "complete"
 	}
 
-	// 2. Check for Specific Pending (Orange/Red)
 	if math.Abs(color.Red-targetPendingR) < tol &&
 		math.Abs(color.Green-targetPendingG) < tol &&
 		math.Abs(color.Blue-targetPendingB) < tol {
 		return "pending"
 	}
 
-	// 3. Legacy/Manual Check: Pure Green (e.g. #00FF00)
+	// Legacy checks
 	if color.Green > 0.8 && color.Red < 0.3 && color.Blue < 0.3 {
 		return "complete"
 	}
-
-	// 4. Legacy/Manual Check: Pure Red (e.g. #FF0000)
 	if color.Red > 0.8 && color.Green < 0.3 && color.Blue < 0.3 {
 		return "pending"
 	}
 
-	// Default
 	return "todo"
 }
 
@@ -71,16 +75,10 @@ func getStatusFromColor(color *sheets.Color) string {
 func getColorFromStatus(status string) *sheets.Color {
 	switch strings.ToLower(status) {
 	case "complete":
-		// #34A853 (Green)
 		return &sheets.Color{Red: 52.0 / 255.0, Green: 168.0 / 255.0, Blue: 83.0 / 255.0}
 	case "pending":
-		// #E7953F (Orange/Red)
 		return &sheets.Color{Red: 231.0 / 255.0, Green: 149.0 / 255.0, Blue: 63.0 / 255.0}
-	case "todo":
-		// #000000 (Black)
-		return &sheets.Color{Red: 0.0, Green: 0.0, Blue: 0.0}
 	default:
-		// Default Black
 		return &sheets.Color{Red: 0.0, Green: 0.0, Blue: 0.0}
 	}
 }
@@ -106,19 +104,17 @@ func parseCellToDayTasks(date string, cellData *sheets.CellData) models.DayTasks
 	lines := strings.Split(text, "\n")
 	runs := cellData.TextFormatRuns
 
-	// Check cell-level color fallback (if no specific runs exist)
-	var globalCellColor *sheets.Color
+	var globalColor *sheets.Color
 	if cellData.UserEnteredFormat != nil && cellData.UserEnteredFormat.TextFormat != nil {
-		globalCellColor = cellData.UserEnteredFormat.TextFormat.ForegroundColor
+		globalColor = cellData.UserEnteredFormat.TextFormat.ForegroundColor
 	}
 
 	currentIdx := 0
 	for _, line := range lines {
 		lineLen := len(line)
-		status := "todo" // Default
+		status := "todo"
 
 		if len(runs) > 0 {
-			// Logic: iterate runs to find the one active at currentIdx
 			var activeColor *sheets.Color
 			for _, run := range runs {
 				if run.StartIndex <= int64(currentIdx) {
@@ -132,9 +128,8 @@ func parseCellToDayTasks(date string, cellData *sheets.CellData) models.DayTasks
 				}
 			}
 			status = getStatusFromColor(activeColor)
-		} else if globalCellColor != nil {
-			// Fallback: If no runs, use the cell's global text color
-			status = getStatusFromColor(globalCellColor)
+		} else if globalColor != nil {
+			status = getStatusFromColor(globalColor)
 		}
 
 		cleanLine := strings.TrimSpace(line)
@@ -148,35 +143,28 @@ func parseCellToDayTasks(date string, cellData *sheets.CellData) models.DayTasks
 				dt.Todo = append(dt.Todo, cleanLine)
 			}
 		}
-
-		// Advance index (line length + newline char)
 		currentIdx += lineLen + 1
 	}
 
 	return dt
 }
 
-// GetLatestTasks fetches and parses tasks with colors
-func GetLatestTasks(employeeName string) (models.EmployeeTasksResponse, error) {
-	srv, err := config.GetSheetsService()
+// Helper: Fetch data from a single sheet
+func fetchSheetData(srv *sheets.Service, sheetTitle string, employeeName string) ([]models.DayTasks, string, error) {
+	// 1. Fetch Header Row
+	respHeader, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!1:1", sheetTitle)).Do()
 	if err != nil {
-		return models.EmployeeTasksResponse{}, err
-	}
-
-	// 1. Fetch Header Row to map dates
-	respHeader, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("%s!1:1", config.SheetName)).Do()
-	if err != nil {
-		return models.EmployeeTasksResponse{}, err
+		return nil, "", err
 	}
 	if len(respHeader.Values) == 0 {
-		return models.EmployeeTasksResponse{}, fmt.Errorf("sheet is empty")
+		return nil, "", nil
 	}
 	headerRow := respHeader.Values[0]
 
-	// 2. Fetch Values to find Employee Row Index (Lightweight)
-	respValues, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("%s!A:A", config.SheetName)).Do()
+	// 2. Fetch All Values (Lightweight) to find row
+	respValues, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", sheetTitle)).Do()
 	if err != nil {
-		return models.EmployeeTasksResponse{}, err
+		return nil, "", err
 	}
 
 	rowIndex := -1
@@ -194,240 +182,315 @@ func GetLatestTasks(employeeName string) (models.EmployeeTasksResponse, error) {
 	}
 
 	if rowIndex == -1 {
-		return models.EmployeeTasksResponse{}, fmt.Errorf("employee '%s' not found", employeeName)
+		return nil, "", nil
 	}
 
-	// 3. Fetch Specific Row with Formatting (Heavier)
-	// We now include userEnteredFormat(textFormat(foregroundColor)) to catch cell-level colors
+	// 3. Fetch Specific Row with Formatting
 	req := srv.Spreadsheets.Get(config.SpreadsheetID).
-		Ranges(fmt.Sprintf("%s!A%d:ZZ%d", config.SheetName, rowIndex+1, rowIndex+1)).
+		Ranges(fmt.Sprintf("'%s'!A%d:ZZ%d", sheetTitle, rowIndex+1, rowIndex+1)).
 		IncludeGridData(true).
 		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))")
 
 	resp, err := req.Do()
 	if err != nil {
-		return models.EmployeeTasksResponse{}, err
+		return nil, "", err
 	}
 
-	var history []models.DayTasks
+	var sheetHistory []models.DayTasks
 
 	if len(resp.Sheets) > 0 && len(resp.Sheets[0].Data) > 0 && len(resp.Sheets[0].Data[0].RowData) > 0 {
 		rowCells := resp.Sheets[0].Data[0].RowData[0].Values
 
-		// Iterate backwards to find latest 7
-		count := 0
 		for i := len(rowCells) - 1; i >= 1; i-- {
-			if count >= 7 {
-				break
-			}
-
 			cell := rowCells[i]
-			// Check if cell has content
 			if cell.UserEnteredValue == nil || cell.UserEnteredValue.StringValue == nil || *cell.UserEnteredValue.StringValue == "" {
 				continue
 			}
 
-			// Determine Date
 			dateStr := "Unknown"
 			if i < len(headerRow) {
 				dateStr = fmt.Sprintf("%v", headerRow[i])
 			}
 
 			dayTask := parseCellToDayTasks(dateStr, cell)
-			history = append(history, dayTask)
-			count++
+			sheetHistory = append(sheetHistory, dayTask)
 		}
+	}
+	return sheetHistory, fullEmployeeName, nil
+}
+
+// GetLatestTasks fetches tasks from specific sheets (DEV, Managers)
+func GetLatestTasks(employeeName string) (models.EmployeeTasksResponse, error) {
+	srv, err := config.GetSheetsService()
+	if err != nil {
+		return models.EmployeeTasksResponse{}, err
+	}
+
+	meta, err := srv.Spreadsheets.Get(config.SpreadsheetID).Do()
+	if err != nil {
+		return models.EmployeeTasksResponse{}, err
+	}
+
+	var allHistory []models.DayTasks
+	var foundName string
+	var foundSheet string
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, targetTitle := range targetSheets {
+		// Use actual title from meta if exists (handles casing)
+		sheet := findSheetByTitle(meta, targetTitle)
+		if sheet == nil {
+			continue 
+		}
+		
+		wg.Add(1)
+		go func(title string) {
+			defer wg.Done()
+			hist, name, err := fetchSheetData(srv, title, employeeName)
+			if err == nil && len(hist) > 0 {
+				mu.Lock()
+				allHistory = append(allHistory, hist...)
+				if foundName == "" && name != "" {
+					foundName = name
+					foundSheet = title
+				}
+				mu.Unlock()
+			}
+		}(sheet.Properties.Title)
+	}
+	wg.Wait()
+
+	if len(allHistory) == 0 {
+		return models.EmployeeTasksResponse{}, fmt.Errorf("employee '%s' not found in DEV or Managers sheets", employeeName)
 	}
 
 	return models.EmployeeTasksResponse{
-		EmployeeName: fullEmployeeName,
-		History:      history,
+		EmployeeName: foundName,
+		SheetName:    foundSheet,
+		History:      allHistory,
 	}, nil
 }
 
-// GetAllEmployeesLatestTasks fetches logic for all
+// GetAllEmployeesLatestTasks fetches from "DEV" and "Managers" sheets
 func GetAllEmployeesLatestTasks() ([]models.EmployeeTasksResponse, error) {
 	srv, err := config.GetSheetsService()
 	if err != nil {
 		return nil, err
 	}
 
-	// Updated fields to include userEnteredFormat
-	req := srv.Spreadsheets.Get(config.SpreadsheetID).
-		Ranges(fmt.Sprintf("%s!A:ZZ", config.SheetName)).
-		IncludeGridData(true).
-		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))")
-
-	resp, err := req.Do()
+	meta, err := srv.Spreadsheets.Get(config.SpreadsheetID).Do()
 	if err != nil {
 		return nil, err
 	}
 
-	respHeader, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("%s!1:1", config.SheetName)).Do()
-	if err != nil {
-		return nil, err
-	}
-	headerRow := respHeader.Values[0]
+	var allEmployees []models.EmployeeTasksResponse
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	// Initialize as empty slice
-	allEmployees := []models.EmployeeTasksResponse{}
-
-	if len(resp.Sheets) > 0 && len(resp.Sheets[0].Data) > 0 {
-		rows := resp.Sheets[0].Data[0].RowData
-
-		// Skip header (index 0)
-		for rIdx, row := range rows {
-			if rIdx == 0 {
-				continue
-			}
-
-			if len(row.Values) == 0 || row.Values[0].UserEnteredValue == nil || row.Values[0].UserEnteredValue.StringValue == nil {
-				continue
-			}
-			empName := *row.Values[0].UserEnteredValue.StringValue
-			if empName == "" {
-				continue
-			}
-
-			var history []models.DayTasks
-			count := 0
-
-			for cIdx := len(row.Values) - 1; cIdx >= 1; cIdx-- {
-				if count >= 7 {
-					break
-				}
-
-				cell := row.Values[cIdx]
-				if cell.UserEnteredValue == nil || cell.UserEnteredValue.StringValue == nil || *cell.UserEnteredValue.StringValue == "" {
-					continue
-				}
-
-				dateStr := "Unknown"
-				if cIdx < len(headerRow) {
-					dateStr = fmt.Sprintf("%v", headerRow[cIdx])
-				}
-
-				dayTask := parseCellToDayTasks(dateStr, cell)
-				history = append(history, dayTask)
-				count++
-			}
-
-			allEmployees = append(allEmployees, models.EmployeeTasksResponse{
-				EmployeeName: empName,
-				History:      history,
-			})
+	for _, targetTitle := range targetSheets {
+		sheet := findSheetByTitle(meta, targetTitle)
+		if sheet == nil {
+			continue
 		}
+		
+		wg.Add(1)
+		go func(title string) {
+			defer wg.Done()
+			
+			req := srv.Spreadsheets.Get(config.SpreadsheetID).
+				Ranges(fmt.Sprintf("'%s'!A:ZZ", title)).
+				IncludeGridData(true).
+				Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))")
+			
+			resp, err := req.Do()
+			if err != nil { return }
+
+			// Headers
+			respHeader, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!1:1", title)).Do()
+			if err != nil || len(respHeader.Values) == 0 { return }
+			headerRow := respHeader.Values[0]
+
+			var sheetEmployees []models.EmployeeTasksResponse
+
+			if len(resp.Sheets) > 0 && len(resp.Sheets[0].Data) > 0 {
+				rows := resp.Sheets[0].Data[0].RowData
+				
+				for rIdx, row := range rows {
+					if rIdx == 0 { continue }
+					
+					if len(row.Values) == 0 || row.Values[0].UserEnteredValue == nil || row.Values[0].UserEnteredValue.StringValue == nil {
+						continue
+					}
+					empName := *row.Values[0].UserEnteredValue.StringValue
+					if empName == "" { continue }
+
+					var localHist []models.DayTasks
+					count := 0 
+					
+					for cIdx := len(row.Values) - 1; cIdx >= 1; cIdx-- {
+						if count >= 7 { break }
+						
+						cell := row.Values[cIdx]
+						if cell.UserEnteredValue == nil || cell.UserEnteredValue.StringValue == nil || *cell.UserEnteredValue.StringValue == "" {
+							continue
+						}
+
+						dateStr := "Unknown"
+						if cIdx < len(headerRow) {
+							dateStr = fmt.Sprintf("%v", headerRow[cIdx])
+						}
+
+						dayTask := parseCellToDayTasks(dateStr, cell)
+						localHist = append(localHist, dayTask)
+						count++
+					}
+
+					sheetEmployees = append(sheetEmployees, models.EmployeeTasksResponse{
+						EmployeeName: empName,
+						SheetName:    title,
+						History:      localHist,
+					})
+				}
+			}
+
+			mu.Lock()
+			allEmployees = append(allEmployees, sheetEmployees...)
+			mu.Unlock()
+
+		}(sheet.Properties.Title)
 	}
+	wg.Wait()
+	
+	sort.Slice(allEmployees, func(i, j int) bool {
+		return allEmployees[i].EmployeeName < allEmployees[j].EmployeeName
+	})
 
 	return allEmployees, nil
 }
 
-// AddTask updates existing tasks or appends new ones
+// AddTask updates or creates tasks
 func AddTask(req models.TaskRequest) error {
 	srv, err := config.GetSheetsService()
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 
-	// 0. Fetch Metadata first to get SheetID and Grid Limits
-	sheetMeta, err := srv.Spreadsheets.Get(config.SpreadsheetID).Do()
-	if err != nil {
-		return err
-	}
-	var sheetID int64
-	var maxCol int64
-	for _, sheet := range sheetMeta.Sheets {
-		if strings.EqualFold(sheet.Properties.Title, config.SheetName) {
-			sheetID = sheet.Properties.SheetId
-			maxCol = sheet.Properties.GridProperties.ColumnCount
-			break
-		}
-	}
-
-	// 1. Column Management
-	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("%s!A:ZZ", config.SheetName)).Do()
-	if err != nil {
-		return err
-	}
-	var headerRow []interface{}
-	if len(resp.Values) > 0 {
-		headerRow = resp.Values[0]
-	}
+	meta, err := srv.Spreadsheets.Get(config.SpreadsheetID).Do()
+	if err != nil { return err }
 
 	todayHeader := time.Now().Format("Mon 02-Jan")
-	colIndex := -1
-
-	for i, h := range headerRow {
-		if strings.EqualFold(fmt.Sprintf("%v", h), todayHeader) {
-			colIndex = i
-			break
+	
+	var targetSheetID int64 = -1
+	var targetSheetTitle string = ""
+	var rowIndex int = -1
+	
+	// 1. Determine Target Sheet
+	if req.Role != "" {
+		sheet := findSheetByTitle(meta, req.Role)
+		if sheet != nil {
+			targetSheetID = sheet.Properties.SheetId
+			targetSheetTitle = sheet.Properties.Title
+		} else {
+			return fmt.Errorf("sheet '%s' not found", req.Role)
+		}
+	} else {
+		// Fallback: Default to "DEV"
+		sheet := findSheetByTitle(meta, "DEV")
+		if sheet != nil {
+			targetSheetID = sheet.Properties.SheetId
+			targetSheetTitle = sheet.Properties.Title
+		} else {
+			return fmt.Errorf("default sheet 'DEV' not found")
 		}
 	}
 
-	// NEW: Enforce that we are only editing the rightmost column (Today's column)
-	if colIndex != -1 && colIndex < len(headerRow)-1 {
-		return fmt.Errorf("restriction: can only edit the rightmost column (today's column). '%s' is not the last column", todayHeader)
-	}
-
-	if colIndex == -1 {
-		colIndex = len(headerRow) // The new index will be after the last existing column
-
-		// CHECK GRID LIMITS & EXPAND IF NEEDED
-		if int64(colIndex) >= maxCol {
-			columnsToAdd := int64(colIndex) - maxCol + 1
-			if columnsToAdd < 1 {
-				columnsToAdd = 1
-			}
-
-			appendReq := &sheets.BatchUpdateSpreadsheetRequest{
-				Requests: []*sheets.Request{
-					{
-						AppendDimension: &sheets.AppendDimensionRequest{
-							SheetId:   sheetID,
-							Dimension: "COLUMNS",
-							Length:    columnsToAdd,
-						},
-					},
-				},
-			}
-			_, err = srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, appendReq).Do()
-			if err != nil {
-				return fmt.Errorf("failed to expand sheet grid: %v", err)
-			}
-		}
-
-		// Now write the new header
-		writeRange := fmt.Sprintf("%s!%s1", config.SheetName, getColumnName(colIndex+1))
-		vr := &sheets.ValueRange{Values: [][]interface{}{{todayHeader}}}
-		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, vr).ValueInputOption("RAW").Do()
-		if err != nil {
-			return fmt.Errorf("failed to create column header: %v", err)
-		}
-	}
-
-	// 2. Find Employee Row (Exact Match)
-	rowIndex := -1
-	for i, row := range resp.Values {
-		if len(row) > 0 {
-			name := fmt.Sprintf("%v", row[0])
-			if namesMatch(name, req.EmployeeName) {
-				rowIndex = i
+	// 2. Find or Create Employee Row
+	resp, _ := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", targetSheetTitle)).Do()
+	if resp != nil {
+		for r, row := range resp.Values {
+			if len(row) > 0 && namesMatch(fmt.Sprintf("%v", row[0]), req.EmployeeName) {
+				rowIndex = r
 				break
 			}
 		}
 	}
+
 	if rowIndex == -1 {
-		return fmt.Errorf("employee '%s' not found", req.EmployeeName)
+		// Append New Employee
+		appendRange := fmt.Sprintf("'%s'!A:A", targetSheetTitle)
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{{req.EmployeeName}},
+		}
+		_, err := srv.Spreadsheets.Values.Append(config.SpreadsheetID, appendRange, vr).ValueInputOption("RAW").Do()
+		if err != nil {
+			return fmt.Errorf("failed to add new employee: %v", err)
+		}
+		
+		// Re-fetch to find index
+		respRetry, _ := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", targetSheetTitle)).Do()
+		for r, row := range respRetry.Values {
+			if len(row) > 0 && namesMatch(fmt.Sprintf("%v", row[0]), req.EmployeeName) {
+				rowIndex = r
+				break
+			}
+		}
+		if rowIndex == -1 {
+			return fmt.Errorf("failed to locate employee after creation")
+		}
 	}
 
-	// 3. Fetch Existing Rich Text (include userEnteredFormat fallback info)
-	cellRangeA1 := fmt.Sprintf("%s!%s%d", config.SheetName, getColumnName(colIndex+1), rowIndex+1)
+	// 3. Find or Create Date Column
+	targetColIndex := -1
+	resp, err = srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!1:1", targetSheetTitle)).Do()
+	var headerRow []interface{}
+	
+	if err == nil && len(resp.Values) > 0 {
+		headerRow = resp.Values[0]
+		for i, h := range headerRow {
+			if strings.EqualFold(fmt.Sprintf("%v", h), todayHeader) {
+				targetColIndex = i
+				break
+			}
+		}
+	}
+
+	if targetColIndex == -1 {
+		if headerRow == nil {
+			targetColIndex = 1 
+		} else {
+			targetColIndex = len(headerRow)
+		}
+
+		var maxCol int64
+		for _, s := range meta.Sheets {
+			if s.Properties.SheetId == targetSheetID {
+				maxCol = s.Properties.GridProperties.ColumnCount
+				break
+			}
+		}
+
+		if int64(targetColIndex) >= maxCol {
+			appendReq := &sheets.BatchUpdateSpreadsheetRequest{
+				Requests: []*sheets.Request{{
+					AppendDimension: &sheets.AppendDimensionRequest{
+						SheetId: targetSheetID, Dimension: "COLUMNS", Length: 1,
+					},
+				}},
+			}
+			srv.Spreadsheets.BatchUpdate(config.SpreadsheetID, appendReq).Do()
+		}
+
+		writeRange := fmt.Sprintf("'%s'!%s1", targetSheetTitle, getColumnName(targetColIndex+1))
+		vr := &sheets.ValueRange{Values: [][]interface{}{{todayHeader}}}
+		srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, vr).ValueInputOption("RAW").Do()
+	}
+
+	// 4. Update Cell (Rich Text)
+	cellRangeA1 := fmt.Sprintf("'%s'!%s%d", targetSheetTitle, getColumnName(targetColIndex+1), rowIndex+1)
 	cellResp, err := srv.Spreadsheets.Get(config.SpreadsheetID).
 		Ranges(cellRangeA1).
 		Fields("sheets(data(rowData(values(userEnteredValue,textFormatRuns,userEnteredFormat(textFormat(foregroundColor))))))").
 		Do()
 
-	// struct to hold task and its exact color
 	type taskData struct {
 		Task  string
 		Color *sheets.Color
@@ -442,8 +505,6 @@ func AddTask(req models.TaskRequest) error {
 			text := *cell.UserEnteredValue.StringValue
 			lines := strings.Split(text, "\n")
 			runs := cell.TextFormatRuns
-
-			// Fallback color for cell
 			var globalColor *sheets.Color
 			if cell.UserEnteredFormat != nil && cell.UserEnteredFormat.TextFormat != nil {
 				globalColor = cell.UserEnteredFormat.TextFormat.ForegroundColor
@@ -455,12 +516,8 @@ func AddTask(req models.TaskRequest) error {
 				if len(runs) > 0 {
 					for _, run := range runs {
 						if run.StartIndex <= int64(currIdx) {
-							if run.Format != nil {
-								activeColor = run.Format.ForegroundColor
-							}
-						} else {
-							break
-						}
+							if run.Format != nil { activeColor = run.Format.ForegroundColor }
+						} else { break }
 					}
 				} else if globalColor != nil {
 					activeColor = globalColor
@@ -477,7 +534,6 @@ func AddTask(req models.TaskRequest) error {
 		}
 	}
 
-	// 4. Merge New Tasks (Update if exists, Append if not)
 	for _, newTask := range req.Tasks {
 		found := false
 		for i, existing := range existingTasks {
@@ -495,38 +551,29 @@ func AddTask(req models.TaskRequest) error {
 		}
 	}
 
-	// 5. Rebuild Cell Value and Runs
 	var newTextBuilder string
 	var newRuns []*sheets.TextFormatRun
 
 	for i, item := range existingTasks {
 		startIdx := int64(len([]rune(newTextBuilder)))
-
 		newTextBuilder += item.Task
-
 		newRuns = append(newRuns, &sheets.TextFormatRun{
 			StartIndex: startIdx,
-			Format: &sheets.TextFormat{
-				ForegroundColor: item.Color,
-			},
+			Format: &sheets.TextFormat{ ForegroundColor: item.Color },
 		})
-
-		if i < len(existingTasks)-1 {
-			newTextBuilder += "\n"
-		}
+		if i < len(existingTasks)-1 { newTextBuilder += "\n" }
 	}
 
-	// 6. Update via BatchUpdate
 	reqBatch := &sheets.BatchUpdateSpreadsheetRequest{
 		Requests: []*sheets.Request{
 			{
 				UpdateCells: &sheets.UpdateCellsRequest{
 					Range: &sheets.GridRange{
-						SheetId:          sheetID,
+						SheetId:          targetSheetID,
 						StartRowIndex:    int64(rowIndex),
 						EndRowIndex:      int64(rowIndex + 1),
-						StartColumnIndex: int64(colIndex),
-						EndColumnIndex:   int64(colIndex + 1),
+						StartColumnIndex: int64(targetColIndex),
+						EndColumnIndex:   int64(targetColIndex + 1),
 					},
 					Rows: []*sheets.RowData{
 						{

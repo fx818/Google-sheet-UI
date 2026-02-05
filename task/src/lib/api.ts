@@ -8,6 +8,7 @@ export interface TaskItem {
 export interface TaskRequest {
   employee_name: string;
   employee_code?: string;
+  role: 'Dev' | 'Managers'; // Added Role
   tasks: TaskItem[];
 }
 
@@ -20,6 +21,7 @@ export interface DayTasks {
 
 export interface EmployeeHistory {
   employee_name: string;
+  sheet_name: string; // "Dev" or "Managers"
   history: DayTasks[];
 }
 
@@ -60,7 +62,7 @@ export const api = {
     if (!response.ok) throw new Error(await response.text());
   },
 
-  // Metadata (Static)
+  // Metadata
   async getMetadata(): Promise<EmployeeMetadata[]> {
     const response = await fetch(`${BACKEND_URL}/metadata`);
     if (!response.ok) throw new Error('Failed to fetch metadata');
@@ -76,7 +78,7 @@ export const api = {
     if (!response.ok) throw new Error('Failed to upsert metadata');
   },
 
-  // Daily Logs (Timestamps per day)
+  // Daily Logs
   async getDailyLogs(): Promise<DailyLog[]> {
     const response = await fetch(`${BACKEND_URL}/logs`);
     if (!response.ok) throw new Error('Failed to fetch logs');

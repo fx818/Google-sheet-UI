@@ -1,88 +1,97 @@
 package config
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 
-	_ "github.com/lib/pq"
+	"google.golang.org/api/sheets/v4"
 )
 
-var DB *sql.DB
+// Sheet Names for "Database" functionality
+const (
+	SheetDBEmployees = "database"      // Metadata: Name, ID, Project, Created, Updated
+	SheetDBLogs      = "database_logs" // Logs: Name, Date, Created, Updated
+)
 
-// Connection string for NeonDB
-const connectionString = "postgres://neondb_owner:npg_h7cagUZXCp1q@ep-royal-firefly-ah9zoqad-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require"
-
+// InitDB ensures the "database" and "database_logs" sheets exist with headers
 func InitDB() {
-	var err error
-	DB, err = sql.Open("postgres", connectionString)
+	srv, err := GetSheetsService()
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		log.Fatal("Unable to retrieve Sheets client for DB init: ", err)
 	}
 
-	if err = DB.Ping(); err != nil {
-		log.Fatal("Failed to ping database:", err)
+	// 1. Check/Create "database" (Employees)
+	if err := ensureSheet(srv, SheetDBEmployees, []interface{}{"Employee Name", "Employee ID", "Project Name", "Created At", "Updated At"}); err != nil {
+		log.Fatalf("Failed to init %s: %v", SheetDBEmployees, err)
 	}
 
-	// --- AUTO MIGRATION ---
-	
-	// 1. Employees Table
-	createEmployeesTable := `
-	CREATE TABLE IF NOT EXISTS employees (
-		id SERIAL PRIMARY KEY,
-		employee_id TEXT NOT NULL,
-		employee_name TEXT NOT NULL UNIQUE,
-		project_name TEXT,
-		created_at TIMESTAMP DEFAULT NOW(),
-		updated_at TIMESTAMP DEFAULT NOW()
-	);`
-	if _, err = DB.Exec(createEmployeesTable); err != nil {
-		log.Fatal("Failed to create employees table:", err)
+	// 2. Check/Create "database_logs" (Daily Logs)
+	if err := ensureSheet(srv, SheetDBLogs, []interface{}{"Employee Name", "Task Date", "Created At", "Updated At"}); err != nil {
+		log.Fatalf("Failed to init %s: %v", SheetDBLogs, err)
 	}
 
-	// 2. Daily Logs Table
-	createLogsTable := `
-	CREATE TABLE IF NOT EXISTS daily_logs (
-		id SERIAL PRIMARY KEY,
-		employee_name TEXT NOT NULL,
-		task_date TEXT NOT NULL,
-		created_at TIMESTAMP DEFAULT NOW(),
-		updated_at TIMESTAMP DEFAULT NOW()
-	);`
-	if _, err = DB.Exec(createLogsTable); err != nil {
-		log.Fatal("Failed to create daily_logs table:", err)
-	}
-
-	// 3. CLEANUP DUPLICATES (Case-Insensitive Fix)
-	// This deletes rows where the name is the same (ignoring case) and date is same,
-	// keeping only the one with the smallest ID (the original one).
-	cleanupQuery := `
-	DELETE FROM daily_logs a 
-	USING daily_logs b 
-	WHERE a.id > b.id 
-	AND LOWER(a.employee_name) = LOWER(b.employee_name) 
-	AND a.task_date = b.task_date;
-	`
-	if _, err = DB.Exec(cleanupQuery); err != nil {
-		log.Println("Warning: Failed to cleanup duplicate logs:", err)
-	}
-
-	// 4. CREATE CASE-INSENSITIVE INDEX
-	// First, drop the old strict index if it exists
-	_, _ = DB.Exec("DROP INDEX IF EXISTS idx_daily_logs_unique")
-
-	// Create a new unique index that normalizes names to lowercase
-	createIndexQuery := `
-	CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_logs_unique_ci 
-	ON daily_logs (LOWER(employee_name), task_date);
-	`
-	if _, err = DB.Exec(createIndexQuery); err != nil {
-		log.Fatal("Failed to create unique index for daily_logs:", err)
-	}
-
-	fmt.Println("Connected to NeonDB, cleaned duplicates, and ensured CASE-INSENSITIVE constraints!")
+	fmt.Println("Google Sheets 'Database' initialized successfully!")
 }
 
-func GetDB() *sql.DB {
-	return DB
+// ensureSheet checks if a sheet exists, creates it if not, and adds headers if empty
+func ensureSheet(srv *sheets.Service, title string, headers []interface{}) error {
+	// Get Spreadsheet Metadata
+	meta, err := srv.Spreadsheets.Get(SpreadsheetID).Do()
+	if err != nil {
+		return err
+	}
+
+	sheetExists := false
+	var sheetID int64
+	println(sheetID)
+
+	for _, s := range meta.Sheets {
+		if s.Properties.Title == title {
+			sheetExists = true
+			sheetID = s.Properties.SheetId
+			break
+		}
+	}
+
+	// Create Sheet if not exists
+	if !sheetExists {
+		req := &sheets.BatchUpdateSpreadsheetRequest{
+			Requests: []*sheets.Request{
+				{
+					AddSheet: &sheets.AddSheetRequest{
+						Properties: &sheets.SheetProperties{
+							Title: title,
+						},
+					},
+				},
+			},
+		}
+		resp, err := srv.Spreadsheets.BatchUpdate(SpreadsheetID, req).Do()
+		if err != nil {
+			return fmt.Errorf("failed to create sheet %s: %v", title, err)
+		}
+		sheetID = resp.Replies[0].AddSheet.Properties.SheetId
+		fmt.Printf("Created sheet: %s\n", title)
+	}
+
+	// Check headers
+	readRange := fmt.Sprintf("'%s'!1:1", title)
+	resp, err := srv.Spreadsheets.Values.Get(SpreadsheetID, readRange).Do()
+	if err != nil {
+		return err
+	}
+
+	if len(resp.Values) == 0 {
+		// Write Headers
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{headers},
+		}
+		_, err := srv.Spreadsheets.Values.Update(SpreadsheetID, fmt.Sprintf("'%s'!A1", title), vr).ValueInputOption("RAW").Do()
+		if err != nil {
+			return fmt.Errorf("failed to write headers to %s: %v", title, err)
+		}
+		fmt.Printf("Added headers to: %s\n", title)
+	}
+
+	return nil
 }

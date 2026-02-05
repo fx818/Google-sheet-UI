@@ -1,17 +1,22 @@
 package services
 
 import (
-	// "database/sql"
+	"fmt"
 	"go-backend/config"
 	"strings"
+	"sync"
 	"time"
+
+	"google.golang.org/api/sheets/v4"
 )
 
 type EmployeeMetadata struct {
-	ID           string  `json:"id"`
+	ID           string  `json:"id"` // Just row index for frontend compatibility
 	EmployeeID   string  `json:"employee_id"`
 	EmployeeName string  `json:"employee_name"`
 	ProjectName  string  `json:"project_name"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    *string `json:"updated_at"`
 }
 
 type DailyLog struct {
@@ -21,85 +26,229 @@ type DailyLog struct {
 	UpdatedAt    string `json:"updated_at"`
 }
 
-// GetAllEmployeesMetadata fetches static info
+// Mutex to handle concurrency for our "Sheet DB"
+var dbMutex sync.Mutex
+
+// GetAllEmployeesMetadata reads from "database" sheet
 func GetAllEmployeesMetadata() ([]EmployeeMetadata, error) {
-	db := config.GetDB()
-	rows, err := db.Query("SELECT id, employee_id, employee_name, project_name FROM employees")
+	srv, err := config.GetSheetsService()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	// Read all data skipping header
+	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A2:E", config.SheetDBEmployees)).Do()
+	if err != nil {
+		return nil, err
+	}
 
 	employees := []EmployeeMetadata{}
-	for rows.Next() {
-		var emp EmployeeMetadata
-		if err := rows.Scan(&emp.ID, &emp.EmployeeID, &emp.EmployeeName, &emp.ProjectName); err != nil {
-			return nil, err
+	for i, row := range resp.Values {
+		// Expecting: Name, ID, Project, Created, Updated
+		if len(row) < 3 {
+			continue
+		}
+		
+		emp := EmployeeMetadata{
+			ID:           fmt.Sprintf("%d", i+2), // Row number
+			EmployeeName: fmt.Sprintf("%v", row[0]),
+			EmployeeID:   fmt.Sprintf("%v", row[1]),
+			ProjectName:  fmt.Sprintf("%v", row[2]),
+		}
+		if len(row) > 3 {
+			emp.CreatedAt = fmt.Sprintf("%v", row[3])
+		}
+		if len(row) > 4 {
+			upd := fmt.Sprintf("%v", row[4])
+			emp.UpdatedAt = &upd
 		}
 		employees = append(employees, emp)
 	}
 	return employees, nil
 }
 
-// GetAllDailyLogs fetches timestamps for all days
+// GetAllDailyLogs reads from "database_logs" sheet
 func GetAllDailyLogs() ([]DailyLog, error) {
-	db := config.GetDB()
-	rows, err := db.Query("SELECT employee_name, task_date, created_at, updated_at FROM daily_logs")
+	srv, err := config.GetSheetsService()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+
+	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A2:D", config.SheetDBLogs)).Do()
+	if err != nil {
+		return nil, err
+	}
 
 	logs := []DailyLog{}
-	for rows.Next() {
-		var l DailyLog
-		var c, u time.Time
-		if err := rows.Scan(&l.EmployeeName, &l.TaskDate, &c, &u); err != nil {
-			return nil, err
+	for _, row := range resp.Values {
+		// Expecting: Name, Date, Created, Updated
+		if len(row) < 4 {
+			continue
 		}
-		l.CreatedAt = c.Format(time.RFC3339)
-		l.UpdatedAt = u.Format(time.RFC3339)
-		logs = append(logs, l)
+		logs = append(logs, DailyLog{
+			EmployeeName: fmt.Sprintf("%v", row[0]),
+			TaskDate:     fmt.Sprintf("%v", row[1]),
+			CreatedAt:    fmt.Sprintf("%v", row[2]),
+			UpdatedAt:    fmt.Sprintf("%v", row[3]),
+		})
 	}
 	return logs, nil
 }
 
-// UpsertEmployeeMetadata inserts or updates employee static info
+// UpsertEmployeeMetadata updates or inserts employee info in "database" sheet
 func UpsertEmployeeMetadata(empID, name, project string) error {
-	db := config.GetDB()
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	srv, err := config.GetSheetsService()
+	if err != nil {
+		return err
+	}
+
+	// 1. Read existing data to check for duplicates
+	readRange := fmt.Sprintf("'%s'!A:A", config.SheetDBEmployees)
+	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, readRange).Do()
+	if err != nil {
+		return err
+	}
+
 	cleanName := strings.TrimSpace(name)
-	
-	// Note: We use the simple unique constraint on employee_name here.
-	// If you want case-insensitivity here too, similar index logic would be needed.
-	// For now, we trust exact matches or handle duplicates via daily logs logic.
-	query := `
-		INSERT INTO employees (employee_id, employee_name, project_name)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (employee_name) 
-		DO UPDATE SET employee_id = EXCLUDED.employee_id, project_name = EXCLUDED.project_name;
-	`
-	_, err := db.Exec(query, empID, cleanName, project)
-	return err
+	rowIndex := -1
+
+	// Find row by Name (Column A)
+	for i, row := range resp.Values {
+		if len(row) > 0 && strings.EqualFold(fmt.Sprintf("%v", row[0]), cleanName) {
+			rowIndex = i
+			break
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+
+	if rowIndex != -1 {
+		// UPDATE existing row
+		// Columns: Name(A), ID(B), Project(C), Created(D), Updated(E)
+		// We update ID, Project, Updated. We preserve Name and Created.
+		
+		// Row index in API is 1-based, slice is 0-based.
+		// A1 notation: Row 1 is header. rowIndex 0 in slice is Row 1.
+		// So slice index i = Row i+1.
+		
+		updateRange := fmt.Sprintf("'%s'!B%d:C%d", config.SheetDBEmployees, rowIndex+1, rowIndex+1)
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{{empID, project}},
+		}
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, updateRange, vr).ValueInputOption("RAW").Do()
+		if err != nil { return err }
+
+		// Update Timestamp separately (Col E)
+		tsRange := fmt.Sprintf("'%s'!E%d", config.SheetDBEmployees, rowIndex+1)
+		vrTs := &sheets.ValueRange{Values: [][]interface{}{{now}}}
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, tsRange, vrTs).ValueInputOption("RAW").Do()
+		return err
+
+	} else {
+		// INSERT new row
+		// Name, ID, Project, Created, Updated
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{{cleanName, empID, project, now, now}},
+		}
+		_, err = srv.Spreadsheets.Values.Append(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", config.SheetDBEmployees), vr).ValueInputOption("RAW").Do()
+		return err
+	}
 }
 
-// UpsertDailyLog updates the timestamp for a specific day
-// Logic: If row exists (matching name case-insensitively + date), ONLY update updated_at.
-// If row doesn't exist, insert with created_at = NOW().
+// UpsertDailyLog updates or inserts log in "database_logs" sheet
 func UpsertDailyLog(name, date string) error {
-	db := config.GetDB()
-	
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	srv, err := config.GetSheetsService()
+	if err != nil {
+		return err
+	}
+
+	// 1. Read Name(A) and Date(B) columns
+	readRange := fmt.Sprintf("'%s'!A:B", config.SheetDBLogs)
+	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, readRange).Do()
+	if err != nil {
+		return err
+	}
+
 	cleanName := strings.TrimSpace(name)
 	cleanDate := strings.TrimSpace(date)
+	rowIndex := -1
 
-	// We target the UNIQUE INDEX on (LOWER(employee_name), task_date)
-	query := `
-		INSERT INTO daily_logs (employee_name, task_date, created_at, updated_at)
-		VALUES ($1, $2, NOW(), NOW())
-		ON CONFLICT (LOWER(employee_name), task_date) 
-		DO UPDATE SET updated_at = NOW(); 
-	`
-	// The DO UPDATE clause specifically does NOT touch created_at, preserving the original timestamp.
+	// Find match on Name AND Date
+	for i, row := range resp.Values {
+		if len(row) >= 2 {
+			rowName := fmt.Sprintf("%v", row[0])
+			rowDate := fmt.Sprintf("%v", row[1])
+			
+			if strings.EqualFold(rowName, cleanName) && strings.EqualFold(rowDate, cleanDate) {
+				rowIndex = i
+				break
+			}
+		}
+	}
+
+	now := time.Now().Format(time.RFC3339)
+
+	if rowIndex != -1 {
+		// UPDATE existing row
+		// Cols: Name(A), Date(B), Created(C), Updated(D)
+		// Only update Updated(D). created_at MUST persist.
+		
+		updateRange := fmt.Sprintf("'%s'!D%d", config.SheetDBLogs, rowIndex+1)
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{{now}},
+		}
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, updateRange, vr).ValueInputOption("RAW").Do()
+		return err
+
+	} else {
+		// INSERT new row
+		// Name, Date, Created, Updated
+		vr := &sheets.ValueRange{
+			Values: [][]interface{}{{cleanName, cleanDate, now, now}},
+		}
+		_, err = srv.Spreadsheets.Values.Append(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", config.SheetDBLogs), vr).ValueInputOption("RAW").Do()
+		return err
+	}
+}
+
+// UpdateTimestamp updates only the updated_at field for an employee in "database"
+func UpdateTimestamp(name string) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	srv, err := config.GetSheetsService()
+	if err != nil {
+		return err
+	}
+
+	// Read Names
+	resp, err := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", config.SheetDBEmployees)).Do()
+	if err != nil { return err }
+
+	cleanName := strings.TrimSpace(name)
+	rowIndex := -1
+
+	for i, row := range resp.Values {
+		if len(row) > 0 && strings.EqualFold(fmt.Sprintf("%v", row[0]), cleanName) {
+			rowIndex = i
+			break
+		}
+	}
+
+	if rowIndex != -1 {
+		now := time.Now().Format(time.RFC3339)
+		tsRange := fmt.Sprintf("'%s'!E%d", config.SheetDBEmployees, rowIndex+1)
+		vr := &sheets.ValueRange{Values: [][]interface{}{{now}}}
+		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, tsRange, vr).ValueInputOption("RAW").Do()
+		return err
+	}
 	
-	_, err := db.Exec(query, cleanName, cleanDate)
-	return err
+	// If not found, we generally ignore or error. Ignoring allows lazy creation on next UpsertMetadata.
+	return nil
 }

@@ -177,22 +177,22 @@ export default function Dashboard() {
     return { t, p, c };
   };
 
-  if (isLoading) return <div className="flex items-center justify-center min-h-screen"><RefreshCw className="animate-spin text-blue-600" size={40} /></div>;
+  if (isLoading) return <div className="flex items-center justify-center min-h-screen"><RefreshCw className="animate-spin text-red-600" size={40} /></div>;
 
   return (
     <div className="max-w-7xl mx-auto p-4 bg-gray-50 min-h-screen font-sans">
       <div className="mb-6">
         <div className="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-lg shadow-lg"><Users className="text-white" size={20} /></div>
+            <div className="p-2 bg-red-600 rounded-lg shadow-lg"><Users className="text-white" size={20} /></div>
             <div><h1 className="text-2xl font-bold text-gray-800">Team Overview</h1><p className="text-gray-500 text-xs font-medium">Dev & Manager Tasks</p></div>
           </div>
-          <button onClick={fetchData} className="flex items-center gap-2 px-3 py-1.5 bg-white text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 shadow-sm text-sm font-semibold"><RefreshCw size={16} /> Refresh</button>
+          <button onClick={fetchData} className="flex items-center gap-2 px-3 py-1.5 bg-white text-red-600 border border-red-200 rounded-lg hover:bg-red-50 shadow-sm text-sm font-semibold"><RefreshCw size={16} /> Refresh</button>
         </div>
 
         <div className="flex gap-2 border-b border-gray-200">
           {['dashboard', 'dev', 'managers'].map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab as Tab)} className={`px-4 py-2 text-sm font-medium flex items-center gap-2 border-b-2 capitalize transition-all ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            <button key={tab} onClick={() => setActiveTab(tab as Tab)} className={`px-4 py-2 text-sm font-medium flex items-center gap-2 border-b-2 capitalize transition-all ${activeTab === tab ? 'border-red-600 text-red-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
               {tab === 'dashboard' ? <LayoutDashboard size={16} /> : <Database size={16} />} {tab === 'dev' ? 'Dev Sheet' : tab === 'managers' ? 'Managers Sheet' : 'Dashboard'}
             </button>
           ))}
@@ -265,8 +265,8 @@ export default function Dashboard() {
           {/* Filters... (Same as before) */}
           <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row gap-3 items-center">
              {/* ... Search Inputs ... */}
-             <div className="relative flex-1 w-full md:w-auto"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input list="employee-names" type="text" placeholder="Search Name..." value={nameFilter} onChange={(e) => setNameFilter(e.target.value)} className="pl-9 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-blue-500 outline-none" /><datalist id="employee-names">{allNames.map((name, i) => <option key={i} value={name} />)}</datalist></div>
-             <div className="relative flex-1 w-full md:w-auto"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[10px] font-bold">ID</span><input list="employee-ids" type="text" placeholder="Filter ID..." value={idFilter} onChange={(e) => setIdFilter(e.target.value)} className="pl-8 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-blue-500 outline-none" /><datalist id="employee-ids">{allIds.map((id, i) => <option key={i} value={id as string} />)}</datalist></div>
+             <div className="relative flex-1 w-full md:w-auto"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input list="employee-names" type="text" placeholder="Search Name..." value={nameFilter} onChange={(e) => setNameFilter(e.target.value)} className="pl-9 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-red-500 outline-none" /><datalist id="employee-names">{allNames.map((name, i) => <option key={i} value={name} />)}</datalist></div>
+             <div className="relative flex-1 w-full md:w-auto"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[10px] font-bold">ID</span><input list="employee-ids" type="text" placeholder="Filter ID..." value={idFilter} onChange={(e) => setIdFilter(e.target.value)} className="pl-8 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-red-500 outline-none" /><datalist id="employee-ids">{allIds.map((id, i) => <option key={i} value={id as string} />)}</datalist></div>
              <div className="flex items-center gap-2 w-full md:w-auto border-l border-gray-100 pl-3">
                <ArrowUpDown size={14} className="text-gray-400" />
                <select value={`${sortConfig.key}-${sortConfig.direction}`} onChange={(e) => { const [key, direction] = e.target.value.split('-'); setSortConfig({ key: key as SortKey, direction: direction as SortDirection }); }} className="py-1.5 pl-1 pr-6 border-none bg-transparent text-sm font-medium text-gray-600 focus:ring-0 cursor-pointer">
@@ -289,7 +289,7 @@ export default function Dashboard() {
                         <h2 className="text-base font-bold text-gray-800">{employee.employee_name}</h2>
                         <div className="flex gap-2">
                           <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-500 font-mono">{employee.metadata?.employee_id || 'NO_ID'}</span>
-                          <span className="text-[10px] bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded text-blue-700 font-medium">{employee.metadata?.project_name || 'No Project'}</span>
+                          <span className="text-[10px] bg-red-50 border border-red-100 px-1.5 py-0.5 rounded text-red-700 font-medium">{employee.metadata?.project_name || 'No Project'}</span>
                         </div>
                       </div>
                       
@@ -308,8 +308,8 @@ export default function Dashboard() {
                           const dayLog = employee.logs?.find(l => l.task_date === day.date);
                           return (
                             <div key={dIdx} className={`w-64 flex-shrink-0 transition-opacity ${isToday ? 'opacity-100' : 'opacity-60 grayscale-[0.3]'}`}>
-                              <div className={`flex items-center justify-between mb-2 pb-1 border-b ${isToday ? 'border-blue-200' : 'border-gray-100'}`}>
-                                <div className={`flex items-center gap-1.5 text-xs font-bold ${isToday ? 'text-blue-700' : 'text-gray-500'}`}><Calendar size={12} />{day.date}</div>
+                              <div className={`flex items-center justify-between mb-2 pb-1 border-b ${isToday ? 'border-red-200' : 'border-gray-100'}`}>
+                                <div className={`flex items-center gap-1.5 text-xs font-bold ${isToday ? 'text-red-700' : 'text-gray-500'}`}><Calendar size={12} />{day.date}</div>
                                 {dayLog &&  <span className="text-[9px] text-gray-400 font-mono">{ formatTime(dayLog.created_at) } - { formatTime(dayLog.updated_at)}</span>}
                               </div>
                               <div className="space-y-1.5">
@@ -346,7 +346,7 @@ export default function Dashboard() {
             </div>
             <div className="flex gap-2">
               <button onClick={() => setEditingTask(null)} className="flex-1 px-3 py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-md hover:bg-gray-50">Cancel</button>
-              <button onClick={() => handleUpdateStatus(editingTask.currentStatus)} disabled={isSaving} className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 flex justify-center items-center gap-2">{isSaving ? <RefreshCw className="animate-spin" size={14} /> : 'Save'}</button>
+              <button onClick={() => handleUpdateStatus(editingTask.currentStatus)} disabled={isSaving} className="flex-1 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 flex justify-center items-center gap-2">{isSaving ? <RefreshCw className="animate-spin" size={14} /> : 'Save'}</button>
             </div>
           </div>
         </div>

@@ -7,7 +7,6 @@ export interface TaskItem {
 
 export interface TaskRequest {
   employee_name: string;
-  employee_code?: string;
   role: 'Dev' | 'Managers';
   date?: string; // Optional: "Mon 02-Jan"
   tasks: TaskItem[];
@@ -28,9 +27,8 @@ export interface EmployeeHistory {
 
 export interface EmployeeMetadata {
   id: string;
-  employee_id: string;
   employee_name: string;
-  project_name: string;
+  // Removed employee_id and project_name
 }
 
 export interface DailyLog {
@@ -70,7 +68,7 @@ export const api = {
     return response.json();
   },
 
-  async upsertMetadata(data: { employee_id: string; employee_name: string; project_name: string }): Promise<void> {
+  async upsertMetadata(data: { employee_name: string }): Promise<void> {
     const response = await fetch(`${BACKEND_URL}/metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

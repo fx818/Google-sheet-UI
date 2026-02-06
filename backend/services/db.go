@@ -12,9 +12,7 @@ import (
 
 type EmployeeMetadata struct {
 	ID           string  `json:"id"` // Just row index for frontend compatibility
-	EmployeeID   string  `json:"employee_id"`
 	EmployeeName string  `json:"employee_name"`
-	ProjectName  string  `json:"project_name"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    *string `json:"updated_at"`
 }
@@ -44,22 +42,23 @@ func GetAllEmployeesMetadata() ([]EmployeeMetadata, error) {
 
 	employees := []EmployeeMetadata{}
 	for i, row := range resp.Values {
-		// Expecting: Name, ID, Project, Created, Updated
-		if len(row) < 3 {
+		// Expecting: Name, Created, Updated (Simplified schema)
+		// Old schema was: Name(A), ID(B), Project(C), Created(D), Updated(E)
+		// New schema will be: Name(A), Created(B), Updated(C)
+		
+		if len(row) < 1 {
 			continue
 		}
 		
 		emp := EmployeeMetadata{
 			ID:           fmt.Sprintf("%d", i+2), // Row number
 			EmployeeName: fmt.Sprintf("%v", row[0]),
-			EmployeeID:   fmt.Sprintf("%v", row[1]),
-			ProjectName:  fmt.Sprintf("%v", row[2]),
 		}
-		if len(row) > 3 {
-			emp.CreatedAt = fmt.Sprintf("%v", row[3])
+		if len(row) > 1 {
+			emp.CreatedAt = fmt.Sprintf("%v", row[1])
 		}
-		if len(row) > 4 {
-			upd := fmt.Sprintf("%v", row[4])
+		if len(row) > 2 {
+			upd := fmt.Sprintf("%v", row[2])
 			emp.UpdatedAt = &upd
 		}
 		employees = append(employees, emp)
@@ -96,7 +95,7 @@ func GetAllDailyLogs() ([]DailyLog, error) {
 }
 
 // UpsertEmployeeMetadata updates or inserts employee info in "database" sheet
-func UpsertEmployeeMetadata(empID, name, project string) error {
+func UpsertEmployeeMetadata(name string) error {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -127,31 +126,19 @@ func UpsertEmployeeMetadata(empID, name, project string) error {
 
 	if rowIndex != -1 {
 		// UPDATE existing row
-		// Columns: Name(A), ID(B), Project(C), Created(D), Updated(E)
-		// We update ID, Project, Updated. We preserve Name and Created.
+		// New Schema: Name(A), Created(B), Updated(C)
+		// We only need to update Updated(C). Name and Created persist.
 		
-		// Row index in API is 1-based, slice is 0-based.
-		// A1 notation: Row 1 is header. rowIndex 0 in slice is Row 1.
-		// So slice index i = Row i+1.
-		
-		updateRange := fmt.Sprintf("'%s'!B%d:C%d", config.SheetDBEmployees, rowIndex+1, rowIndex+1)
-		vr := &sheets.ValueRange{
-			Values: [][]interface{}{{empID, project}},
-		}
-		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, updateRange, vr).ValueInputOption("RAW").Do()
-		if err != nil { return err }
-
-		// Update Timestamp separately (Col E)
-		tsRange := fmt.Sprintf("'%s'!E%d", config.SheetDBEmployees, rowIndex+1)
+		tsRange := fmt.Sprintf("'%s'!C%d", config.SheetDBEmployees, rowIndex+1)
 		vrTs := &sheets.ValueRange{Values: [][]interface{}{{now}}}
 		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, tsRange, vrTs).ValueInputOption("RAW").Do()
 		return err
 
 	} else {
 		// INSERT new row
-		// Name, ID, Project, Created, Updated
+		// Name, Created, Updated
 		vr := &sheets.ValueRange{
-			Values: [][]interface{}{{cleanName, empID, project, now, now}},
+			Values: [][]interface{}{{cleanName, now, now}},
 		}
 		_, err = srv.Spreadsheets.Values.Append(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", config.SheetDBEmployees), vr).ValueInputOption("RAW").Do()
 		return err
@@ -243,12 +230,12 @@ func UpdateTimestamp(name string) error {
 
 	if rowIndex != -1 {
 		now := time.Now().Format(time.RFC3339)
-		tsRange := fmt.Sprintf("'%s'!E%d", config.SheetDBEmployees, rowIndex+1)
+		// Updated At is now Column C (index 3) in new schema
+		tsRange := fmt.Sprintf("'%s'!C%d", config.SheetDBEmployees, rowIndex+1)
 		vr := &sheets.ValueRange{Values: [][]interface{}{{now}}}
 		_, err = srv.Spreadsheets.Values.Update(config.SpreadsheetID, tsRange, vr).ValueInputOption("RAW").Do()
 		return err
 	}
 	
-	// If not found, we generally ignore or error. Ignoring allows lazy creation on next UpsertMetadata.
 	return nil
 }

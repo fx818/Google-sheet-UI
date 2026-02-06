@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Plus, Trash2, Save, Loader2, Search, User, Briefcase, FileText, Users } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Save, Loader2, Search, User, FileText, Users, ChevronDown } from 'lucide-react';
 import { api } from '../lib/api';
 
 type TaskStatus = 'todo' | 'pending' | 'complete';
@@ -18,16 +18,48 @@ const statusColors = {
 };
 
 export default function EmployeeForm() {
-  const [employeeId, setEmployeeId] = useState('');
   const [employeeName, setEmployeeName] = useState('');
-  const [projectName, setProjectName] = useState('');
   const [role, setRole] = useState<Role>('Dev'); 
-  const [tasks, setTasks] = useState<Task[]>([
-    { id: crypto.randomUUID(), description: '', status: 'todo' },
-  ]);
+  const [tasks, setTasks] = useState<Task[]>(
+    Array.from({ length: 5 }, () => ({ id: crypto.randomUUID(), description: '', status: 'todo' }))
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  
+  // State for existing employees list
+  const [existingEmployees, setExistingEmployees] = useState<{name: string, role: string}[]>([]);
+  const [filteredEmployees, setFilteredEmployees] = useState<{name: string, role: string}[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // 1. Fetch existing employees on mount
+  useEffect(() => {
+    const loadEmployees = async () => {
+      try {
+        const data = await api.getAllTasks();
+        // Extract unique names and their roles
+        const empList = data.map(e => ({
+          name: e.employee_name,
+          role: e.sheet_name
+        }));
+        setExistingEmployees(empList);
+        setFilteredEmployees(empList);
+      } catch (err) {
+        console.warn("Could not load employee list for dropdown", err);
+      }
+    };
+    loadEmployees();
+
+    // Close dropdown when clicking outside
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const addTask = () => {
     setTasks([...tasks, { id: crypto.randomUUID(), description: '', status: 'todo' }]);
@@ -45,6 +77,32 @@ export default function EmployeeForm() {
         task.id === id ? { ...task, [field]: value } : task
       )
     );
+  };
+
+  // 2. Handle Name Change & Auto-Select Role
+  const handleNameChange = (val: string) => {
+    setEmployeeName(val);
+    setShowDropdown(true);
+    
+    // Filter list
+    const filtered = existingEmployees.filter(e => 
+      e.name.toLowerCase().includes(val.toLowerCase())
+    );
+    setFilteredEmployees(filtered);
+
+    // Auto-select role if exact match
+    const match = existingEmployees.find(e => e.name.toLowerCase() === val.toLowerCase());
+    if (match) {
+      if (match.role === 'DEV' || match.role === 'Dev') setRole('Dev');
+      else if (match.role === 'Managers') setRole('Managers');
+    }
+  };
+
+  const selectEmployee = (emp: {name: string, role: string}) => {
+    setEmployeeName(emp.name);
+    if (emp.role === 'DEV' || emp.role === 'Dev') setRole('Dev');
+    else if (emp.role === 'Managers') setRole('Managers');
+    setShowDropdown(false);
   };
 
   const fetchTodayTasks = async () => {
@@ -66,8 +124,8 @@ export default function EmployeeForm() {
 
       const todayEntry = data.history.find(h => h.date === todayStr);
 
-      if (data.sheet_name === 'DEV' || data.sheet_name === 'Managers') {
-        setRole(data.sheet_name === 'DEV' ? 'Dev' : 'Managers');
+      if (data.sheet_name === 'DEV' || data.sheet_name === 'Dev' || data.sheet_name === 'Managers') {
+        setRole((data.sheet_name === 'DEV' || data.sheet_name === 'Dev') ? 'Dev' : 'Managers');
       }
 
       if (todayEntry) {
@@ -102,8 +160,8 @@ export default function EmployeeForm() {
     setMessage(null);
 
     try {
-      const hasEmptyTask = tasks.some((task) => !task.description.trim());
-      if (hasEmptyTask) throw new Error('All tasks must have a description');
+      const nonEmptyTasks = tasks.filter(t => t.description.trim() !== '');
+      if (nonEmptyTasks.length === 0) throw new Error('Please add at least one task description');
 
       const now = new Date();
       const day = now.getDate().toString().padStart(2, '0');
@@ -111,26 +169,19 @@ export default function EmployeeForm() {
       const weekday = now.toLocaleString('en-US', { weekday: 'short' });
       const todayStr = `${weekday} ${day}-${month}`;
 
-      // 1. Send Tasks to Backend (Sheets)
-      // NOTE: Passing role as 'DEV' instead of 'Dev' if selected to match backend expectation strictness
       const targetRole = role === 'Dev' ? 'DEV' : 'Managers';
       
       await api.updateTasks({
         employee_name: employeeName,
-        employee_code: employeeId,
         role: targetRole as any,
-        date: todayStr, // Explicitly sending Today
-        tasks: tasks.map(t => ({ task: t.description, status: t.status }))
+        date: todayStr, 
+        tasks: nonEmptyTasks.map(t => ({ task: t.description, status: t.status }))
       });
 
-      // 2. Upsert Metadata
       await api.upsertMetadata({
-          employee_id: employeeId,
           employee_name: employeeName,
-          project_name: projectName
       });
 
-      // 3. Upsert Daily Log
       await api.upsertDailyLog(employeeName, todayStr);
 
       setMessage({ type: 'success', text: 'Tasks & Logs synced successfully!' });
@@ -170,27 +221,10 @@ export default function EmployeeForm() {
         )}
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          {/* Employee Details Section */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
-            {/* ID */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-gray-600 ml-1">Employee ID</label>
-              <div className="relative group">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4 group-focus-within:text-red-500 transition-colors" />
-                <input
-                  type="text"
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none"
-                  required
-                  placeholder="e.g. EMP-001"
-                />
-              </div>
-            </div>
-
-            {/* Name & Search */}
-            <div className="space-y-1.5">
+            {/* Name & Search with Custom Dropdown */}
+            <div className="space-y-1.5 relative" ref={dropdownRef}>
               <label className="text-xs font-semibold text-gray-600 ml-1">Employee Name</label>
               <div className="flex gap-2">
                 <div className="relative group flex-1">
@@ -198,12 +232,29 @@ export default function EmployeeForm() {
                   <input
                     type="text"
                     value={employeeName}
-                    onChange={(e) => setEmployeeName(e.target.value)}
+                    onChange={(e) => handleNameChange(e.target.value)}
+                    onFocus={() => setShowDropdown(true)}
                     className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none"
                     required
-                    placeholder="John Doe"
+                    placeholder="Search or enter name..."
+                    autoComplete="off"
                   />
+                  {showDropdown && filteredEmployees.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-100 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                      {filteredEmployees.map((emp, i) => (
+                        <div
+                          key={i}
+                          onClick={() => selectEmployee(emp)}
+                          className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer border-b border-gray-50 last:border-0 flex justify-between items-center"
+                        >
+                          <span>{emp.name}</span>
+                          <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{emp.role === 'DEV' ? 'Dev' : 'Mgr'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+                
                 <button
                   type="button"
                   onClick={fetchTodayTasks}
@@ -224,32 +275,14 @@ export default function EmployeeForm() {
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value as Role)}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none appearance-none cursor-pointer"
+                  className="w-full pl-9 pr-8 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none appearance-none cursor-pointer"
                 >
                   <option value="Dev">Developer (DEV Sheet)</option>
                   <option value="Managers">Manager (Managers Sheet)</option>
                 </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+                  <ChevronDown className="h-3 w-3" />
                 </div>
-              </div>
-            </div>
-
-            {/* Project Name */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-gray-600 ml-1">Project Name</label>
-              <div className="relative group">
-                <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-4 w-4 group-focus-within:text-red-500 transition-colors" />
-                <input
-                  type="text"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none"
-                  required
-                  placeholder="Backend Infrastructure"
-                />
               </div>
             </div>
           </div>
@@ -291,7 +324,6 @@ export default function EmployeeForm() {
                       onChange={(e) => updateTask(task.id, 'description', e.target.value)}
                       placeholder="Task description..."
                       className="w-full pl-8 pr-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none text-gray-700"
-                      required
                     />
                   </div>
 
@@ -306,9 +338,7 @@ export default function EmployeeForm() {
                       <option value="complete" className="text-gray-900 bg-white">Complete</option>
                     </select>
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-white/80">
-                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
+                      <ChevronDown className="h-3 w-3" />
                     </div>
                   </div>
 

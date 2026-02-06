@@ -9,7 +9,7 @@ import (
 
 // Sheet Names for "Database" functionality
 const (
-	SheetDBEmployees = "database"      // Metadata: Name, ID, Project, Created, Updated
+	SheetDBEmployees = "database"      // Metadata: Name, Created, Updated
 	SheetDBLogs      = "database_logs" // Logs: Name, Date, Created, Updated
 )
 
@@ -20,8 +20,8 @@ func InitDB() {
 		log.Fatal("Unable to retrieve Sheets client for DB init: ", err)
 	}
 
-	// 1. Check/Create "database" (Employees)
-	if err := ensureSheet(srv, SheetDBEmployees, []interface{}{"Employee Name", "Employee ID", "Project Name", "Created At", "Updated At"}); err != nil {
+	// 1. Check/Create "database" (Employees) - Removed ID/Project
+	if err := ensureSheet(srv, SheetDBEmployees, []interface{}{"Employee Name", "Created At", "Updated At"}); err != nil {
 		log.Fatalf("Failed to init %s: %v", SheetDBEmployees, err)
 	}
 

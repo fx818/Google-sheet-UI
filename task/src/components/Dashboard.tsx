@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
-import { Users, RefreshCw, Edit2, X, Calendar, CheckCircle2, Circle, Clock, Lock, Info, Search, Filter, ArrowUpDown, LayoutDashboard, Database, ChevronDown, ChevronUp } from 'lucide-react';
+import { Users, RefreshCw, Edit2, X, Calendar, CheckCircle2, Circle, Clock, Search, ArrowUpDown, LayoutDashboard, Database, ChevronDown, ChevronUp } from 'lucide-react';
 import { api, EmployeeHistory, EmployeeMetadata, DailyLog } from '../lib/api';
 
 interface MergedEmployee extends EmployeeHistory {
@@ -134,7 +134,7 @@ export default function Dashboard() {
         complete += eComplete;
         return { 
           name: emp.employee_name, 
-          id: emp.metadata?.employee_id || 'N/A',
+          // id: emp.metadata?.employee_id || 'N/A',
           todo: eTodo, 
           pending: ePending, 
           complete: eComplete 
@@ -173,7 +173,7 @@ export default function Dashboard() {
   useEffect(() => { fetchData(); }, []);
 
   const formatDate = (isoString?: string) => isoString ? new Date(isoString).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
-  const formatTime = (isoString?: string) => isoString ? new Date(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+  // const formatTime = (isoString?: string) => isoString ? new Date(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
 
   const getEmployeeStats = (emp: MergedEmployee) => {
     let t = 0, p = 0, c = 0;
@@ -241,7 +241,7 @@ export default function Dashboard() {
                         <div key={i} className="flex items-center justify-between p-2 rounded hover:bg-gray-50 text-sm border border-gray-50 hover:border-gray-100">
                           <div className="flex flex-col">
                             <span className="font-medium text-gray-800">{emp.name}</span>
-                            <span className="text-[10px] text-gray-400">{emp.id}</span>
+                            {/* <span className="text-[10px] text-gray-400">{emp.id}</span> */}
                           </div>
                           <div className="flex gap-2 text-xs font-medium">
                             {emp.todo > 0 && <span className="text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">{emp.todo} T</span>}
@@ -289,8 +289,8 @@ export default function Dashboard() {
                       <div className="flex items-center gap-3">
                         <h2 className="text-base font-bold text-gray-800">{employee.employee_name}</h2>
                         <div className="flex gap-2">
-                          <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-500 font-mono">{employee.metadata?.employee_id || 'NO_ID'}</span>
-                          <span className="text-[10px] bg-red-50 border border-red-100 px-1.5 py-0.5 rounded text-red-700 font-medium">{employee.metadata?.project_name || 'No Project'}</span>
+                          {/* <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-500 font-mono">{employee.metadata?.employee_id || 'NO_ID'}</span> */}
+                          {/* <span className="text-[10px] bg-red-50 border border-red-100 px-1.5 py-0.5 rounded text-red-700 font-medium">{employee.metadata?.project_name || 'No Project'}</span> */}
                         </div>
                       </div>
                       

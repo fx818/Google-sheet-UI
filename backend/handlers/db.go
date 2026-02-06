@@ -28,15 +28,13 @@ func GetDailyLogs(w http.ResponseWriter, r *http.Request) {
 
 func UpsertMetadata(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		EmployeeID   string `json:"employee_id"`
 		EmployeeName string `json:"employee_name"`
-		ProjectName  string `json:"project_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid body", http.StatusBadRequest)
 		return
 	}
-	if err := services.UpsertEmployeeMetadata(req.EmployeeID, req.EmployeeName, req.ProjectName); err != nil {
+	if err := services.UpsertEmployeeMetadata(req.EmployeeName); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -10,7 +10,6 @@ type TaskItem struct {
 // TaskRequest represents the payload for adding new tasks
 type TaskRequest struct {
 	EmployeeName string     `json:"employee_name"`
-	EmployeeCode string     `json:"employee_code"`
 	Role         string     `json:"role"` // "Dev" or "Managers"
 	Date         string     `json:"date"` // Optional: "Mon 02-Jan"
 	Tasks        []TaskItem `json:"tasks"`
@@ -27,6 +26,6 @@ type DayTasks struct {
 // EmployeeTasksResponse is the structure for returning an employee's history
 type EmployeeTasksResponse struct {
 	EmployeeName string     `json:"employee_name"`
-	SheetName    string     `json:"sheet_name"`
+	SheetName    string     `json:"sheet_name"` // Added to track source sheet
 	History      []DayTasks `json:"history"`
 }

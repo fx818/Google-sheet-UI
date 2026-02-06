@@ -21,7 +21,7 @@ export default function EmployeeForm() {
   const [employeeId, setEmployeeId] = useState('');
   const [employeeName, setEmployeeName] = useState('');
   const [projectName, setProjectName] = useState('');
-  const [role, setRole] = useState<Role>('Dev'); // Default to Dev
+  const [role, setRole] = useState<Role>('Dev'); 
   const [tasks, setTasks] = useState<Task[]>([
     { id: crypto.randomUUID(), description: '', status: 'todo' },
   ]);
@@ -66,9 +66,8 @@ export default function EmployeeForm() {
 
       const todayEntry = data.history.find(h => h.date === todayStr);
 
-      // Auto-select role if found
-      if (data.sheet_name === 'Dev' || data.sheet_name === 'Managers') {
-        setRole(data.sheet_name as Role);
+      if (data.sheet_name === 'DEV' || data.sheet_name === 'Managers') {
+        setRole(data.sheet_name === 'DEV' ? 'Dev' : 'Managers');
       }
 
       if (todayEntry) {
@@ -106,25 +105,32 @@ export default function EmployeeForm() {
       const hasEmptyTask = tasks.some((task) => !task.description.trim());
       if (hasEmptyTask) throw new Error('All tasks must have a description');
 
+      const now = new Date();
+      const day = now.getDate().toString().padStart(2, '0');
+      const month = now.toLocaleString('en-US', { month: 'short' });
+      const weekday = now.toLocaleString('en-US', { weekday: 'short' });
+      const todayStr = `${weekday} ${day}-${month}`;
+
+      // 1. Send Tasks to Backend (Sheets)
+      // NOTE: Passing role as 'DEV' instead of 'Dev' if selected to match backend expectation strictness
+      const targetRole = role === 'Dev' ? 'DEV' : 'Managers';
+      
       await api.updateTasks({
         employee_name: employeeName,
         employee_code: employeeId,
-        role: role,
+        role: targetRole as any,
+        date: todayStr, // Explicitly sending Today
         tasks: tasks.map(t => ({ task: t.description, status: t.status }))
       });
 
+      // 2. Upsert Metadata
       await api.upsertMetadata({
           employee_id: employeeId,
           employee_name: employeeName,
           project_name: projectName
       });
 
-      const now = new Date();
-      const day = now.getDate().toString().padStart(2, '0');
-      const month = now.toLocaleString('en-US', { month: 'short' });
-      const weekday = now.toLocaleString('en-US', { weekday: 'short' });
-      const todayStr = `${weekday} ${day}-${month}`;
-      
+      // 3. Upsert Daily Log
       await api.upsertDailyLog(employeeName, todayStr);
 
       setMessage({ type: 'success', text: 'Tasks & Logs synced successfully!' });
@@ -220,7 +226,7 @@ export default function EmployeeForm() {
                   onChange={(e) => setRole(e.target.value as Role)}
                   className="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:bg-white focus:ring-1 focus:ring-red-500/30 focus:border-red-500 transition-all outline-none appearance-none cursor-pointer"
                 >
-                  <option value="Dev">Developer (Dev Sheet)</option>
+                  <option value="Dev">Developer (DEV Sheet)</option>
                   <option value="Managers">Manager (Managers Sheet)</option>
                 </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">

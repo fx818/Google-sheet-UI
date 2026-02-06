@@ -10,6 +10,7 @@ interface MergedEmployee extends EmployeeHistory {
 interface EditingTask {
   employeeName: string;
   sheetName: string; 
+  date: string;
   taskText: string;
   currentStatus: 'todo' | 'pending' | 'complete';
 }
@@ -31,24 +32,32 @@ export default function Dashboard() {
   const [editingTask, setEditingTask] = useState<EditingTask | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [todayStr, setTodayStr] = useState('');
+  const [yesterdayStr, setYesterdayStr] = useState('');
   
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [nameFilter, setNameFilter] = useState('');
-  const [idFilter, setIdFilter] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: SortDirection }>({ 
     key: 'name', 
     direction: 'asc' 
   });
 
-  // State for expanding/collapsing individual stats in dashboard
   const [expandedStats, setExpandedStats] = useState<{dev: boolean, managers: boolean}>({ dev: false, managers: false });
 
   useEffect(() => {
     const now = new Date();
+    // Today
     const day = now.getDate().toString().padStart(2, '0');
     const month = now.toLocaleString('en-US', { month: 'short' });
     const weekday = now.toLocaleString('en-US', { weekday: 'short' });
     setTodayStr(`${weekday} ${day}-${month}`);
+
+    // Yesterday
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    const yDay = yest.getDate().toString().padStart(2, '0');
+    const yMonth = yest.toLocaleString('en-US', { month: 'short' });
+    const yWeekday = yest.toLocaleString('en-US', { weekday: 'short' });
+    setYesterdayStr(`${yWeekday} ${yDay}-${yMonth}`);
   }, []);
 
   const fetchData = async () => {
@@ -94,10 +103,11 @@ export default function Dashboard() {
       await api.updateTasks({
         employee_name: editingTask.employeeName,
         role: editingTask.sheetName as 'Dev' | 'Managers',
+        date: editingTask.date,
         tasks: [{ task: editingTask.taskText, status: newStatus }]
       });
 
-      await api.upsertDailyLog(editingTask.employeeName, todayStr);
+      await api.upsertDailyLog(editingTask.employeeName, editingTask.date);
       await fetchData();
       setEditingTask(null);
     } catch (err: unknown) {
@@ -112,7 +122,6 @@ export default function Dashboard() {
   const analytics = useMemo(() => {
     const calculateStats = (subset: MergedEmployee[]) => {
       let todo = 0, pending = 0, complete = 0;
-      // Per-employee breakdown
       const breakdown = subset.map(emp => {
         let eTodo = 0, ePending = 0, eComplete = 0;
         emp.history.forEach(day => {
@@ -120,11 +129,9 @@ export default function Dashboard() {
           ePending += day.pending.length;
           eComplete += day.complete.length;
         });
-        // Add to aggregate
         todo += eTodo;
         pending += ePending;
         complete += eComplete;
-        
         return { 
           name: emp.employee_name, 
           id: emp.metadata?.employee_id || 'N/A',
@@ -151,7 +158,6 @@ export default function Dashboard() {
     else return []; 
 
     if (nameFilter.trim()) result = result.filter(e => e.employee_name.toLowerCase().includes(nameFilter.toLowerCase()));
-    if (idFilter.trim()) result = result.filter(e => e.metadata?.employee_id.toLowerCase().includes(idFilter.toLowerCase()));
 
     result.sort((a, b) => {
       let comparison = 0;
@@ -160,17 +166,15 @@ export default function Dashboard() {
     });
 
     return result;
-  }, [employees, activeTab, nameFilter, idFilter, sortConfig]);
+  }, [employees, activeTab, nameFilter, sortConfig]);
 
   const allNames = useMemo(() => Array.from(new Set(employees.map(e => e.employee_name))).sort(), [employees]);
-  const allIds = useMemo(() => Array.from(new Set(employees.map(e => e.metadata?.employee_id).filter(Boolean))).sort(), [employees]);
 
   useEffect(() => { fetchData(); }, []);
 
   const formatDate = (isoString?: string) => isoString ? new Date(isoString).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
   const formatTime = (isoString?: string) => isoString ? new Date(isoString).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
 
-  // Function to calculate individual stats per employee for the card header
   const getEmployeeStats = (emp: MergedEmployee) => {
     let t = 0, p = 0, c = 0;
     emp.history.forEach(d => { t += d.todo.length; p += d.pending.length; c += d.complete.length; });
@@ -208,51 +212,48 @@ export default function Dashboard() {
             { id: 'dev', title: 'Dev Team', stats: analytics.dev },
             { id: 'managers', title: 'Managers', stats: analytics.managers }
           ].map((group, idx) => (
-            <div key={idx} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-bold text-gray-800">{group.title}</h3>
-                  <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold">{group.stats.count} Members</span>
-                </div>
-                <div className="grid grid-cols-3 gap-4 mb-4">
-                  <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 text-center"><div className="text-2xl font-bold text-gray-800">{group.stats.todo}</div><div className="text-xs font-semibold text-gray-500 uppercase">To Do</div></div>
-                  <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 text-center"><div className="text-2xl font-bold text-orange-600">{group.stats.pending}</div><div className="text-xs font-semibold text-orange-600/80 uppercase">Pending</div></div>
-                  <div className="p-4 bg-green-50 rounded-lg border border-green-100 text-center"><div className="text-2xl font-bold text-green-600">{group.stats.complete}</div><div className="text-xs font-semibold text-green-600/80 uppercase">Complete</div></div>
-                </div>
+            <div key={idx} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-lg font-bold text-gray-800">{group.title}</h3>
+                <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold">{group.stats.count} Members</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 text-center"><div className="text-2xl font-bold text-gray-800">{group.stats.todo}</div><div className="text-xs font-semibold text-gray-500 uppercase">To Do</div></div>
+                <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 text-center"><div className="text-2xl font-bold text-orange-600">{group.stats.pending}</div><div className="text-xs font-semibold text-orange-600/80 uppercase">Pending</div></div>
+                <div className="p-4 bg-green-50 rounded-lg border border-green-100 text-center"><div className="text-2xl font-bold text-green-600">{group.stats.complete}</div><div className="text-xs font-semibold text-green-600/80 uppercase">Complete</div></div>
+              </div>
+              
+              <div className="border-t border-gray-100 pt-2">
+                <button 
+                  onClick={() => setExpandedStats(prev => ({...prev, [group.id]: !prev[group.id as 'dev' | 'managers']}))}
+                  className="w-full flex items-center justify-between py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors"
+                >
+                  <span className="font-medium">Individual Breakdown</span>
+                  {expandedStats[group.id as 'dev' | 'managers'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
                 
-                {/* Expandable Breakdown */}
-                <div className="border-t border-gray-100 pt-2">
-                  <button 
-                    onClick={() => setExpandedStats(prev => ({...prev, [group.id]: !prev[group.id as 'dev' | 'managers']}))}
-                    className="w-full flex items-center justify-between py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors"
-                  >
-                    <span className="font-medium">Individual Breakdown</span>
-                    {expandedStats[group.id as 'dev' | 'managers'] ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </button>
-                  
-                  {expandedStats[group.id as 'dev' | 'managers'] && (
-                    <div className="mt-2 space-y-2 max-h-96 overflow-y-auto pr-1 custom-scrollbar">
-                      {group.stats.breakdown.length === 0 ? (
-                        <div className="text-center py-4 text-xs text-gray-400">No members found</div>
-                      ) : (
-                        group.stats.breakdown.map((emp, i) => (
-                          <div key={i} className="flex items-center justify-between p-2 rounded hover:bg-gray-50 text-sm border border-gray-50 hover:border-gray-100">
-                            <div className="flex flex-col">
-                              <span className="font-medium text-gray-800">{emp.name}</span>
-                              <span className="text-[10px] text-gray-400">{emp.id}</span>
-                            </div>
-                            <div className="flex gap-2 text-xs font-medium">
-                              {emp.todo > 0 && <span className="text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">{emp.todo} T</span>}
-                              {emp.pending > 0 && <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{emp.pending} P</span>}
-                              {emp.complete > 0 && <span className="text-green-600 bg-green-50 px-1.5 py-0.5 rounded">{emp.complete} C</span>}
-                              {emp.todo === 0 && emp.pending === 0 && emp.complete === 0 && <span className="text-gray-300">-</span>}
-                            </div>
+                {expandedStats[group.id as 'dev' | 'managers'] && (
+                  <div className="mt-2 space-y-2 max-h-96 overflow-y-auto pr-1 custom-scrollbar">
+                    {group.stats.breakdown.length === 0 ? (
+                      <div className="text-center py-4 text-xs text-gray-400">No members found</div>
+                    ) : (
+                      group.stats.breakdown.map((emp, i) => (
+                        <div key={i} className="flex items-center justify-between p-2 rounded hover:bg-gray-50 text-sm border border-gray-50 hover:border-gray-100">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-gray-800">{emp.name}</span>
+                            <span className="text-[10px] text-gray-400">{emp.id}</span>
                           </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
+                          <div className="flex gap-2 text-xs font-medium">
+                            {emp.todo > 0 && <span className="text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">{emp.todo} T</span>}
+                            {emp.pending > 0 && <span className="text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{emp.pending} P</span>}
+                            {emp.complete > 0 && <span className="text-green-600 bg-green-50 px-1.5 py-0.5 rounded">{emp.complete} C</span>}
+                            {emp.todo === 0 && emp.pending === 0 && emp.complete === 0 && <span className="text-gray-300">-</span>}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -262,17 +263,17 @@ export default function Dashboard() {
       {/* LIST VIEW */}
       {activeTab !== 'dashboard' && (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {/* Filters... (Same as before) */}
           <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row gap-3 items-center">
-             {/* ... Search Inputs ... */}
              <div className="relative flex-1 w-full md:w-auto"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input list="employee-names" type="text" placeholder="Search Name..." value={nameFilter} onChange={(e) => setNameFilter(e.target.value)} className="pl-9 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-red-500 outline-none" /><datalist id="employee-names">{allNames.map((name, i) => <option key={i} value={name} />)}</datalist></div>
-             <div className="relative flex-1 w-full md:w-auto"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[10px] font-bold">ID</span><input list="employee-ids" type="text" placeholder="Filter ID..." value={idFilter} onChange={(e) => setIdFilter(e.target.value)} className="pl-8 pr-3 py-1.5 w-full text-sm border border-gray-200 rounded-md focus:ring-1 focus:ring-red-500 outline-none" /><datalist id="employee-ids">{allIds.map((id, i) => <option key={i} value={id as string} />)}</datalist></div>
+             
+             {/* Removed ID Filter as requested */}
+
              <div className="flex items-center gap-2 w-full md:w-auto border-l border-gray-100 pl-3">
                <ArrowUpDown size={14} className="text-gray-400" />
                <select value={`${sortConfig.key}-${sortConfig.direction}`} onChange={(e) => { const [key, direction] = e.target.value.split('-'); setSortConfig({ key: key as SortKey, direction: direction as SortDirection }); }} className="py-1.5 pl-1 pr-6 border-none bg-transparent text-sm font-medium text-gray-600 focus:ring-0 cursor-pointer">
                  <option value="name-asc">Name (A-Z)</option><option value="name-desc">Name (Z-A)</option>
                </select>
-               {(nameFilter || idFilter) && <button onClick={() => { setNameFilter(''); setIdFilter(''); }} className="ml-auto text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50">Clear</button>}
+               {nameFilter && <button onClick={() => setNameFilter('')} className="ml-auto text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1 rounded hover:bg-red-50">Clear</button>}
              </div>
           </div>
 
@@ -293,7 +294,6 @@ export default function Dashboard() {
                         </div>
                       </div>
                       
-                      {/* Individual Stats Badge */}
                       <div className="flex gap-2 text-[10px] font-semibold">
                         <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full border border-gray-200">{stats.t} Todo</span>
                         <span className="px-2 py-0.5 bg-orange-50 text-orange-600 rounded-full border border-orange-100">{stats.p} Pending</span>
@@ -305,18 +305,25 @@ export default function Dashboard() {
                       <div className="flex gap-4 min-w-max">
                         {(employee.history || []).map((day, dIdx) => {
                           const isToday = day.date === todayStr;
+                          const isYesterday = day.date === yesterdayStr;
+                          const canEdit = isToday || isYesterday;
                           const dayLog = employee.logs?.find(l => l.task_date === day.date);
                           return (
-                            <div key={dIdx} className={`w-64 flex-shrink-0 transition-opacity ${isToday ? 'opacity-100' : 'opacity-60 grayscale-[0.3]'}`}>
+                            <div key={dIdx} className={`w-64 flex-shrink-0 transition-opacity ${canEdit ? 'opacity-100' : 'opacity-60 grayscale-[0.3]'}`}>
                               <div className={`flex items-center justify-between mb-2 pb-1 border-b ${isToday ? 'border-red-200' : 'border-gray-100'}`}>
-                                <div className={`flex items-center gap-1.5 text-xs font-bold ${isToday ? 'text-red-700' : 'text-gray-500'}`}><Calendar size={12} />{day.date}</div>
-                                {dayLog &&  <span className="text-[9px] text-gray-400 font-mono">{ formatTime(dayLog.created_at) } - { formatTime(dayLog.updated_at)}</span>}
+                                <div className={`flex items-center gap-1.5 text-xs font-bold ${isToday ? 'text-red-700' : isYesterday ? 'text-gray-700' : 'text-gray-500'}`}>
+                                  <Calendar size={12} />
+                                  {day.date} {isToday && <span className="text-white bg-blue-800 text-red-700 px-1.5 py-0.5 rounded text-[10px]">TODAY</span>} {isYesterday && <span className="text-white bg-red-500 text-red-700 px-1.5 py-0.5 rounded text-[10px]">YEST</span>}
+                                </div>
+                                {dayLog && <span className="text-[9px] text-gray-400 font-mono">Created {formatDate(dayLog.created_at)} <br /> Updated {formatDate(dayLog.updated_at)}</span>}
                               </div>
-                              <div className="space-y-1.5">
-                                {day.todo.map((task, i) => <TaskCard key={`t-${i}`} task={task} status="todo" canEdit={isToday} onClick={() => isToday && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, taskText: task, currentStatus: 'todo' })} />)}
-                                {day.pending.map((task, i) => <TaskCard key={`p-${i}`} task={task} status="pending" canEdit={isToday} onClick={() => isToday && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, taskText: task, currentStatus: 'pending' })} />)}
-                                {day.complete.map((task, i) => <TaskCard key={`c-${i}`} task={task} status="complete" canEdit={isToday} onClick={() => isToday && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, taskText: task, currentStatus: 'complete' })} />)}
-                                {!day.todo.length && !day.pending.length && !day.complete.length && <div className="h-10 border border-dashed border-gray-100 rounded flex items-center justify-center text-gray-300 text-[10px]">Empty</div>}
+                              
+                              {/* Fixed Height Container for Tasks */}
+                              <div className="space-y-1.5 h-32 overflow-y-auto pr-1 custom-scrollbar">
+                                {day.todo.map((task, i) => <TaskCard key={`t-${i}`} task={task} status="todo" canEdit={canEdit} onClick={() => canEdit && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, date: day.date, taskText: task, currentStatus: 'todo' })} />)}
+                                {day.pending.map((task, i) => <TaskCard key={`p-${i}`} task={task} status="pending" canEdit={canEdit} onClick={() => canEdit && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, date: day.date, taskText: task, currentStatus: 'pending' })} />)}
+                                {day.complete.map((task, i) => <TaskCard key={`c-${i}`} task={task} status="complete" canEdit={canEdit} onClick={() => canEdit && setEditingTask({ employeeName: employee.employee_name, sheetName: employee.sheet_name, date: day.date, taskText: task, currentStatus: 'complete' })} />)}
+                                {!day.todo.length && !day.pending.length && !day.complete.length && <div className="h-full flex items-center justify-center text-gray-300 text-[10px] border border-dashed border-gray-100 rounded">Empty</div>}
                               </div>
                             </div>
                           );
@@ -331,7 +338,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Edit Modal (Same) */}
       {editingTask && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-lg shadow-2xl p-5 max-w-sm w-full mx-4">
@@ -365,7 +371,6 @@ function TaskCard({ task, status, canEdit, onClick }: { task: string; status: 't
     </div>
   );
 }
-
 function StatusButton({ active, type, onClick }: { active: boolean; type: 'todo' | 'pending' | 'complete'; onClick: () => void }) {
   const labels = { todo: 'To Do', pending: 'Pending', complete: 'Completed' };
   const activeClasses = { todo: "border-gray-800 bg-gray-100 text-gray-900", pending: "border-orange-500 bg-orange-50 text-orange-900", complete: "border-green-500 bg-green-50 text-green-900" };

@@ -46,7 +46,7 @@ func getStatusFromColor(color *sheets.Color) string {
 	targetPendingG := 149.0 / 255.0
 	targetPendingB := 63.0 / 255.0
 
-	const tol = 0.25
+	const tol = 0.35
 
 	if math.Abs(color.Red-targetGreenR) < tol &&
 		math.Abs(color.Green-targetGreenG) < tol &&
@@ -238,7 +238,6 @@ func GetLatestTasks(employeeName string) (models.EmployeeTasksResponse, error) {
 	var wg sync.WaitGroup
 
 	for _, targetTitle := range targetSheets {
-		// Use actual title from meta if exists (handles casing)
 		sheet := findSheetByTitle(meta, targetTitle)
 		if sheet == nil {
 			continue 
@@ -377,13 +376,25 @@ func AddTask(req models.TaskRequest) error {
 	meta, err := srv.Spreadsheets.Get(config.SpreadsheetID).Do()
 	if err != nil { return err }
 
+	// 1. Determine Target Date Header
+	targetHeader := req.Date
+	if targetHeader == "" {
+		targetHeader = time.Now().Format("Mon 02-Jan")
+	}
+
+	// 2. Validate Allowed Edit Window (Today or Yesterday)
 	todayHeader := time.Now().Format("Mon 02-Jan")
+	yesterdayHeader := time.Now().AddDate(0, 0, -1).Format("Mon 02-Jan")
+
+	if !strings.EqualFold(targetHeader, todayHeader) && !strings.EqualFold(targetHeader, yesterdayHeader) {
+		return fmt.Errorf("restriction: can only edit Today's (%s) or Yesterday's (%s) tasks", todayHeader, yesterdayHeader)
+	}
 	
 	var targetSheetID int64 = -1
 	var targetSheetTitle string = ""
 	var rowIndex int = -1
 	
-	// 1. Determine Target Sheet
+	// 3. Determine Target Sheet
 	if req.Role != "" {
 		sheet := findSheetByTitle(meta, req.Role)
 		if sheet != nil {
@@ -403,7 +414,7 @@ func AddTask(req models.TaskRequest) error {
 		}
 	}
 
-	// 2. Find or Create Employee Row
+	// 4. Find or Create Employee Row
 	resp, _ := srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!A:A", targetSheetTitle)).Do()
 	if resp != nil {
 		for r, row := range resp.Values {
@@ -438,7 +449,7 @@ func AddTask(req models.TaskRequest) error {
 		}
 	}
 
-	// 3. Find or Create Date Column
+	// 5. Find or Create Date Column
 	targetColIndex := -1
 	resp, err = srv.Spreadsheets.Values.Get(config.SpreadsheetID, fmt.Sprintf("'%s'!1:1", targetSheetTitle)).Do()
 	var headerRow []interface{}
@@ -446,7 +457,7 @@ func AddTask(req models.TaskRequest) error {
 	if err == nil && len(resp.Values) > 0 {
 		headerRow = resp.Values[0]
 		for i, h := range headerRow {
-			if strings.EqualFold(fmt.Sprintf("%v", h), todayHeader) {
+			if strings.EqualFold(fmt.Sprintf("%v", h), targetHeader) {
 				targetColIndex = i
 				break
 			}
@@ -480,11 +491,11 @@ func AddTask(req models.TaskRequest) error {
 		}
 
 		writeRange := fmt.Sprintf("'%s'!%s1", targetSheetTitle, getColumnName(targetColIndex+1))
-		vr := &sheets.ValueRange{Values: [][]interface{}{{todayHeader}}}
+		vr := &sheets.ValueRange{Values: [][]interface{}{{targetHeader}}}
 		srv.Spreadsheets.Values.Update(config.SpreadsheetID, writeRange, vr).ValueInputOption("RAW").Do()
 	}
 
-	// 4. Update Cell (Rich Text)
+	// 6. Update Cell (Rich Text)
 	cellRangeA1 := fmt.Sprintf("'%s'!%s%d", targetSheetTitle, getColumnName(targetColIndex+1), rowIndex+1)
 	cellResp, err := srv.Spreadsheets.Get(config.SpreadsheetID).
 		Ranges(cellRangeA1).

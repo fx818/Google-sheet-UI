@@ -8,7 +8,8 @@ export interface TaskItem {
 export interface TaskRequest {
   employee_name: string;
   employee_code?: string;
-  role: 'Dev' | 'Managers'; // Added Role
+  role: 'Dev' | 'Managers';
+  date?: string; // Optional: "Mon 02-Jan"
   tasks: TaskItem[];
 }
 
@@ -21,7 +22,7 @@ export interface DayTasks {
 
 export interface EmployeeHistory {
   employee_name: string;
-  sheet_name: string; // "Dev" or "Managers"
+  sheet_name: string;
   history: DayTasks[];
 }
 

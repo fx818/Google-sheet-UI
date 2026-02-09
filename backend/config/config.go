@@ -13,7 +13,8 @@ import (
 
 const (
 	// Replace this with your actual Spreadsheet ID
-	SpreadsheetID = "1dZJsrUJDrly6k4Cg1CDLMfU86cje3k1c_GxiXb7AytU"
+	// SpreadsheetID = "1dZJsrUJDrly6k4Cg1CDLMfU86cje3k1c_GxiXb7AytU"
+	SpreadsheetID = "1KCnvCP_jSmL-9zpqbmyU1OWOT-dZEUJdlOKf4ZZ2Brk"
 	SheetName     = "DEV" 
 	Credentials   = "credentials.json"
 )

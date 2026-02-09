@@ -334,7 +334,7 @@ export default function EmployeeForm() {
                       className={`w-full appearance-none pl-3 pr-6 py-2 rounded-lg font-medium text-xs outline-none border border-transparent ring-1 ring-inset transition-all cursor-pointer ${statusColors[task.status]}`}
                     >
                       <option value="todo" className="text-gray-900 bg-white">To Do</option>
-                      <option value="pending" className="text-gray-900 bg-white">Pending</option>
+                      <option value="pending" className="text-gray-900 bg-white">WIP</option>
                       <option value="complete" className="text-gray-900 bg-white">Complete</option>
                     </select>
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-white/80">

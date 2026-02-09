@@ -219,7 +219,7 @@ export default function Dashboard() {
               </div>
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 text-center"><div className="text-2xl font-bold text-gray-800">{group.stats.todo}</div><div className="text-xs font-semibold text-gray-500 uppercase">To Do</div></div>
-                <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 text-center"><div className="text-2xl font-bold text-orange-600">{group.stats.pending}</div><div className="text-xs font-semibold text-orange-600/80 uppercase">Pending</div></div>
+                <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 text-center"><div className="text-2xl font-bold text-orange-600">{group.stats.pending}</div><div className="text-xs font-semibold text-orange-600/80 uppercase">WIP</div></div>
                 <div className="p-4 bg-green-50 rounded-lg border border-green-100 text-center"><div className="text-2xl font-bold text-green-600">{group.stats.complete}</div><div className="text-xs font-semibold text-green-600/80 uppercase">Complete</div></div>
               </div>
               
@@ -296,7 +296,7 @@ export default function Dashboard() {
                       
                       <div className="flex gap-2 text-[10px] font-semibold">
                         <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full border border-gray-200">{stats.t} Todo</span>
-                        <span className="px-2 py-0.5 bg-orange-50 text-orange-600 rounded-full border border-orange-100">{stats.p} Pending</span>
+                        <span className="px-2 py-0.5 bg-orange-50 text-orange-600 rounded-full border border-orange-100">{stats.p} WIP</span>
                         <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded-full border border-green-100">{stats.c} Done</span>
                       </div>
                     </div>
@@ -372,7 +372,7 @@ function TaskCard({ task, status, canEdit, onClick }: { task: string; status: 't
   );
 }
 function StatusButton({ active, type, onClick }: { active: boolean; type: 'todo' | 'pending' | 'complete'; onClick: () => void }) {
-  const labels = { todo: 'To Do', pending: 'Pending', complete: 'Completed' };
+  const labels = { todo: 'To Do', pending: 'WIP', complete: 'Completed' };
   const activeClasses = { todo: "border-gray-800 bg-gray-100 text-gray-900", pending: "border-orange-500 bg-orange-50 text-orange-900", complete: "border-green-500 bg-green-50 text-green-900" };
   return (
     <button onClick={onClick} className={`flex items-center justify-between px-3 py-2 rounded-md border text-sm transition-all ${active ? activeClasses[type] : "border-gray-200 hover:border-gray-300 text-gray-500 bg-white"}`}>
